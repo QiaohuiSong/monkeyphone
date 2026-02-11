@@ -87,6 +87,8 @@ onUnmounted(() => {
 .phone-shell {
   width: 375px;
   height: 812px;
+  max-height: calc(100vh - 20px);
+  max-height: calc(100dvh - 20px); /* 动态视口高度，适配移动端浏览器 */
   border: 8px solid #000;
   border-radius: 40px;
   overflow: hidden;
@@ -95,6 +97,21 @@ onUnmounted(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   background: #000;
+}
+
+/* 移动端：去掉外框，全屏显示 */
+@media (max-width: 400px) {
+  .phone-shell {
+    width: 100%;
+    height: 100%;
+    max-height: 100vh;
+    max-height: 100dvh;
+    border: none;
+    border-radius: 0;
+    top: 0;
+    left: 0;
+    transform: none;
+  }
 }
 
 .phone-screen {
