@@ -1,5 +1,121 @@
-# Vue 3 + Vite
+# MonkeyPhone
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+一个基于 Vue 3 + Vite 的模拟手机应用，支持 AI 角色聊天、朋友圈、好感度系统等功能。
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## 功能特性
+
+- 📱 仿真手机界面
+- 💬 微信风格聊天（支持 AI 角色对话）
+- 👥 角色广场（分享和发现角色）
+- 💕 好感度系统（爱的火花）
+- 📸 朋友圈功能
+- 🎭 多人设管理
+
+## 环境要求
+
+- Node.js 18+
+- npm 9+
+
+## 快速开始
+
+### 方式一：一键启动（推荐新手）
+
+简单的前后台启动方式，适合开发和测试。
+
+**Linux / macOS:**
+```bash
+chmod +x start.sh stop.sh
+./start.sh      # 启动服务
+./stop.sh       # 停止服务
+```
+
+**Windows:**
+```batch
+start.bat       # 双击或命令行运行启动
+```
+
+启动后访问：
+- 前端: http://localhost:5173
+- 后端: http://localhost:3000
+
+### 方式二：PM2 启动（推荐生产环境）
+
+使用 PM2 进程管理器，支持进程守护、崩溃自动重启、日志管理。
+
+**Linux / macOS:**
+```bash
+chmod +x pm2-start.sh pm2-stop.sh
+./pm2-start.sh  # 启动服务
+./pm2-stop.sh   # 停止服务
+```
+
+**Windows:**
+```batch
+pm2-start.bat   # 启动服务
+pm2-stop.bat    # 停止服务
+```
+
+**PM2 常用命令:**
+```bash
+pm2 status      # 查看服务状态
+pm2 logs        # 查看所有日志
+pm2 logs monkeyphone-backend   # 查看后端日志
+pm2 logs monkeyphone-frontend  # 查看前端日志
+pm2 monit       # 打开监控面板
+pm2 restart all # 重启所有服务
+```
+
+**设置开机自启（Linux）:**
+```bash
+pm2 startup     # 生成启动脚本
+pm2 save        # 保存当前进程列表
+```
+
+## 手动启动
+
+如果不使用脚本，也可以手动启动：
+
+```bash
+# 安装依赖
+npm install
+cd server && npm install && cd ..
+
+# 启动后端
+cd server && node index.js
+
+# 新终端，启动前端
+npm run dev
+```
+
+## 项目结构
+
+```
+monkeyphone/
+├── src/                    # 前端源码
+│   ├── apps/              # 手机应用
+│   │   ├── wechat/        # 微信应用
+│   │   ├── love-spark/    # 爱的火花（好感度）
+│   │   └── ...
+│   ├── stores/            # Pinia 状态管理
+│   └── services/          # API 服务
+├── server/                 # 后端服务
+│   ├── index.js           # 主入口
+│   ├── routes/            # API 路由
+│   ├── storage.js         # 数据存储
+│   └── data/              # 用户数据（已 gitignore）
+├── start.sh / start.bat   # 一键启动脚本
+├── stop.sh                # 停止脚本
+├── pm2-start.sh / .bat    # PM2 启动脚本
+└── pm2-stop.sh / .bat     # PM2 停止脚本
+```
+
+## 技术栈
+
+- **前端:** Vue 3 + Vite + Pinia + Vue Router
+- **后端:** Node.js + Express
+- **AI:** 支持多种 AI 模型接口
+- **实时通信:** WebSocket
+
+## License
+
+MIT
