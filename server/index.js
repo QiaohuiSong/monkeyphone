@@ -1526,9 +1526,9 @@ app.get('/api/affection-levels', authMiddleware, (req, res) => {
 })
 
 // 启动服务器（使用 HTTP server 以支持 WebSocket）
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`)
-  console.log(`WebSocket server running on ws://localhost:${PORT}`)
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`)
+  console.log(`WebSocket server running on ws://0.0.0.0:${PORT}`)
   console.log(`用户数据存储在: ./data/<username>/`)
 })
 
