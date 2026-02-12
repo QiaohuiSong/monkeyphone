@@ -5,9 +5,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
   // WebSocket 连接
   const ws = ref(null)
   const isConnected = ref(false)
+  const isPageVisible = ref(true)
 
   // 事件监听器 { eventType: Set<callback> }
   const listeners = reactive({})
+
+  // 重连配置
+  const RECONNECT_DELAY = 5000        // 普通重连延迟
+  const BACKGROUND_TIMEOUT = 5 * 60 * 1000  // 后台5分钟后才断开
+  let backgroundTimer = null
+  let reconnectTimer = null
 
   // 获取用户名
   function getUsername() {
@@ -88,22 +95,80 @@ export const useWebSocketStore = defineStore('websocket', () => {
       console.log('[WebSocket] 已断开')
       isConnected.value = false
 
-      // 5秒后重连
-      setTimeout(() => {
-        if (getUsername()) {
+      // 清除之前的重连计时器
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+
+      // 只有在页面可见时才自动重连
+      if (isPageVisible.value && getUsername()) {
+        reconnectTimer = setTimeout(() => {
           connect()
-        }
-      }, 5000)
+        }, RECONNECT_DELAY)
+      }
     }
   }
 
   // 断开连接
   function disconnect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     if (ws.value) {
       ws.value.close()
       ws.value = null
     }
     isConnected.value = false
+  }
+
+  // 页面可见性变化处理
+  function handleVisibilityChange() {
+    const wasVisible = isPageVisible.value
+    isPageVisible.value = !document.hidden
+
+    if (isPageVisible.value) {
+      // 页面变为可见
+      console.log('[WebSocket] 页面可见，检查连接状态')
+
+      // 清除后台断开计时器
+      if (backgroundTimer) {
+        clearTimeout(backgroundTimer)
+        backgroundTimer = null
+      }
+
+      // 如果连接已断开，立即重连
+      if (!isConnected.value && getUsername()) {
+        connect()
+      }
+    } else {
+      // 页面变为不可见（切换到后台）
+      console.log('[WebSocket] 页面切换到后台，将在5分钟后断开连接')
+
+      // 设置后台超时断开计时器
+      if (backgroundTimer) {
+        clearTimeout(backgroundTimer)
+      }
+      backgroundTimer = setTimeout(() => {
+        console.log('[WebSocket] 后台超时，断开连接')
+        disconnect()
+      }, BACKGROUND_TIMEOUT)
+    }
+  }
+
+  // 初始化页面可见性监听
+  function initVisibilityListener() {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  }
+
+  // 移除页面可见性监听
+  function removeVisibilityListener() {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    if (backgroundTimer) {
+      clearTimeout(backgroundTimer)
+      backgroundTimer = null
+    }
   }
 
   // 添加事件监听器
@@ -132,10 +197,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   return {
     isConnected,
+    isPageVisible,
     connect,
     disconnect,
     on,
     off,
-    send
+    send,
+    initVisibilityListener,
+    removeVisibilityListener
   }
 })

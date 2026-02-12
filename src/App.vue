@@ -1,10 +1,22 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import PhoneShell from './os/PhoneShell.vue'
+import { useWebSocketStore } from './stores/websocketStore.js'
 
 const route = useRoute()
 const isLoginPage = computed(() => route.path === '/login')
+
+// 初始化 WebSocket 页面可见性监听
+const wsStore = useWebSocketStore()
+
+onMounted(() => {
+  wsStore.initVisibilityListener()
+})
+
+onUnmounted(() => {
+  wsStore.removeVisibilityListener()
+})
 </script>
 
 <template>
