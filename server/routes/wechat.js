@@ -584,6 +584,42 @@ router.put('/:charId/chats/:sessionId/message/:messageId', authMiddleware, async
   }
 })
 
+// 删除单条消息
+router.delete('/:charId/chats/:sessionId/message/:messageId', authMiddleware, async (req, res) => {
+  try {
+    const { charId, sessionId, messageId } = req.params
+    const username = req.user.username
+
+    const { chatsDir } = await ensureWechatStructure(username, charId)
+    const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
+
+    if (!await fs.pathExists(chatPath)) {
+      return res.status(404).json({ error: '聊天记录不存在' })
+    }
+
+    await withLock(`chat:${username}:${charId}:${sessionId}`, async () => {
+      const content = await fs.readFile(chatPath, 'utf-8')
+      const lines = content.split('\n').filter(line => line.trim())
+
+      // 过滤掉要删除的消息
+      const updatedLines = lines.filter(line => {
+        try {
+          const msg = JSON.parse(line)
+          return msg.id !== parseInt(messageId) && msg.id !== messageId
+        } catch {
+          return true
+        }
+      })
+
+      await fs.writeFile(chatPath, updatedLines.join('\n') + (updatedLines.length > 0 ? '\n' : ''), 'utf-8')
+      res.json({ success: true })
+    })
+  } catch (error) {
+    console.error('删除消息失败:', error)
+    res.status(500).json({ error: error.message || '删除消息失败' })
+  }
+})
+
 // 清空聊天记录
 router.delete('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
   try {

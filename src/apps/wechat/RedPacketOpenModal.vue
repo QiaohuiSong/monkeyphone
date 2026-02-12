@@ -134,7 +134,8 @@ function handleOverlayClick(e) {
             <!-- 提示文字 -->
             <div class="tip-text">
               <span class="tip-icon">💰</span>
-              已存入零钱，可用于发红包
+              已存入零钱
+              <span class="sync-tip">(已同步至钱包)</span>
             </div>
 
             <!-- 底部链接 -->
@@ -477,6 +478,12 @@ function handleOverlayClick(e) {
 
 .tip-icon {
   font-size: 16px;
+}
+
+.sync-tip {
+  color: #07c160;
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 .result-footer {

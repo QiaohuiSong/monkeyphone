@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* 禁用下拉刷新与橡皮筋效果 - 优化移动端体验 */
+html, body {
+  overscroll-behavior-y: contain; /* 阻止滚动链传递给浏览器 */
+  overflow-x: hidden; /* 防止左右滑动 */
+  height: 100%;
+  position: fixed; /* 防止 iOS 上的整体弹性滚动 */
+  width: 100%;
+}
+
+#app {
+  height: 100%;
+  overflow-y: auto; /* 让内部容器滚动，而不是 body 滚动 */
+  -webkit-overflow-scrolling: touch; /* 保持 iOS 惯性滚动 */
+}
+
 /* 全局隐藏滚动条 */
 * {
   scrollbar-width: none; /* Firefox */

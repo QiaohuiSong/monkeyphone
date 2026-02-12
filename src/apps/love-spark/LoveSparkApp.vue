@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { ChevronLeft, ChevronRight, Heart, Sparkles } from 'lucide-vue-next'
-import { getMyCharacters, getCharacterForChat } from '../../services/api.js'
+import { ChevronLeft, ChevronRight, Heart, Sparkles, Users } from 'lucide-vue-next'
+import { getMyCharacters, getCharacterForChat, getPersonas } from '../../services/api.js'
 import { getAllAffections, getAffectionLevels } from './affectionApi.js'
 import { useWebSocketStore } from '../../stores/websocketStore.js'
 
@@ -10,6 +10,20 @@ const affections = ref({})
 const levels = ref([])
 const currentIndex = ref(0)
 const loading = ref(true)
+
+// 用户切换相关
+const personas = ref([])  // 人设列表
+const currentSessionId = ref('player')
+const showUserSelector = ref(false)
+
+// 计算所有可选身份（默认身份 + 所有人设）
+const allSessions = computed(() => {
+  const list = [{ id: 'player', name: '默认身份', avatar: null }]
+  for (const p of personas.value) {
+    list.push({ id: p.id, name: p.name, avatar: p.avatar })
+  }
+  return list
+})
 
 // 特效状态
 const showRipple = ref(false)
@@ -130,7 +144,12 @@ function formatDate(dateStr) {
 
 // 处理好感度更新
 function handleAffectionUpdate(data) {
-  const { charId, newScore, level, level_title, change, reason } = data
+  const { charId, newScore, level, level_title, change, reason, sessionId } = data
+
+  // 只处理当前选中的 session 的更新
+  if (sessionId && sessionId !== currentSessionId.value) {
+    return
+  }
 
   // 更新好感度数据
   if (!affections.value[charId]) {
@@ -159,25 +178,33 @@ function handleAffectionUpdate(data) {
   }
 }
 
-// 加载数据
-async function loadData() {
-  loading.value = true
+// 获取 session 显示名称
+function getSessionDisplayName(sessionId) {
+  const session = allSessions.value.find(s => s.id === sessionId)
+  return session?.name || sessionId
+}
+
+// 切换用户
+async function switchSession(sessionId) {
+  currentSessionId.value = sessionId
+  showUserSelector.value = false
+  currentIndex.value = 0
+  await loadAffectionData()
+}
+
+// 加载好感度数据
+async function loadAffectionData() {
   try {
-    const [myChars, affs, lvls] = await Promise.all([
-      getMyCharacters(),
-      getAllAffections(),
-      getAffectionLevels()
-    ])
+    const affs = await getAllAffections(currentSessionId.value)
+    affections.value = affs
 
-    // 获取我的角色
-    const charList = [...myChars]
-    const myCharIds = new Set(myChars.map(c => c.id))
+    // 更新角色列表（只显示有好感度数据的角色）
+    const charList = [...characters.value]
+    const myCharIds = new Set(characters.value.map(c => c.id))
 
-    // 检查好感度数据中是否有不在我的角色列表中的角色（广场角色）
     const affectionCharIds = Object.keys(affs)
     for (const charId of affectionCharIds) {
       if (!myCharIds.has(charId)) {
-        // 尝试加载广场角色信息
         try {
           const charData = await getCharacterForChat(charId)
           if (charData) {
@@ -187,6 +214,7 @@ async function loadData() {
               avatar: charData.avatar,
               isPlazaChar: true
             })
+            myCharIds.add(charId)
           }
         } catch (e) {
           console.warn(`广场角色 ${charId} 加载失败`)
@@ -195,9 +223,29 @@ async function loadData() {
     }
 
     characters.value = charList
-    affections.value = affs
+  } catch (e) {
+    console.error('加载好感度数据失败:', e)
+  }
+}
+
+// 加载数据
+async function loadData() {
+  loading.value = true
+  try {
+    const [myChars, personaList, lvls] = await Promise.all([
+      getMyCharacters(),
+      getPersonas(),
+      getAffectionLevels()
+    ])
+
+    characters.value = [...myChars]
+    personas.value = personaList
     levels.value = lvls
-    console.log('[LoveSpark] 加载完成，角色数量:', charList.length, charList.map(c => c.name))
+
+    // 加载当前 session 的好感度数据
+    await loadAffectionData()
+
+    console.log('[LoveSpark] 加载完成，角色数量:', characters.value.length, '身份数量:', allSessions.value.length)
   } catch (e) {
     console.error('加载数据失败:', e)
   } finally {
@@ -258,6 +306,11 @@ onUnmounted(() => {
 
         <button class="nav-btn" @click="nextCharacter" :disabled="allCharacters.length <= 1">
           <ChevronRight :size="24" />
+        </button>
+
+        <!-- 右上角用户切换按钮 -->
+        <button class="user-switch-btn" @click="showUserSelector = true">
+          <Users :size="18" />
         </button>
       </div>
 
@@ -389,6 +442,35 @@ onUnmounted(() => {
         </div>
       </div>
     </template>
+
+    <!-- 用户切换选择器 -->
+    <Teleport to="body">
+      <div v-if="showUserSelector" class="user-selector-overlay" @click.self="showUserSelector = false">
+        <div class="user-selector-modal">
+          <div class="user-selector-header">
+            <span>切换身份</span>
+            <span class="current-user">当前: {{ getSessionDisplayName(currentSessionId) }}</span>
+          </div>
+          <div class="user-selector-list">
+            <div
+              v-for="session in allSessions"
+              :key="session.id"
+              class="user-selector-item"
+              :class="{ active: session.id === currentSessionId }"
+              @click="switchSession(session.id)"
+            >
+              <div class="user-avatar">
+                <img v-if="session.avatar" :src="session.avatar" />
+                <span v-else>{{ session.name[0] }}</span>
+              </div>
+              <div class="user-name">{{ session.name }}</div>
+              <div v-if="session.id === currentSessionId" class="user-check">✓</div>
+            </div>
+          </div>
+          <button class="user-selector-close" @click="showUserSelector = false">关闭</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -471,6 +553,31 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 16px;
   background: linear-gradient(180deg, rgba(255,20,147,0.15) 0%, transparent 100%);
+  position: relative;
+}
+
+/* 右上角用户切换按钮 */
+.user-switch-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,105,180,0.3);
+  color: #ff69b4;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+  z-index: 10;
+}
+
+.user-switch-btn:active {
+  transform: scale(0.9);
+  background: rgba(255,105,180,0.5);
 }
 
 .nav-btn {
@@ -798,7 +905,7 @@ onUnmounted(() => {
 
 .diary-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   padding: 10px 12px;
   background: rgba(255,255,255,0.03);
   border-radius: 10px;
@@ -810,15 +917,15 @@ onUnmounted(() => {
   font-size: 11px;
   color: #888;
   flex-shrink: 0;
+  padding-top: 1px;
 }
 
 .diary-reason {
   flex: 1;
   font-size: 13px;
   color: #ddd;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .diary-change {
@@ -827,6 +934,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   min-width: 36px;
   text-align: right;
+  padding-top: 1px;
 }
 
 .diary-item.positive .diary-change {
@@ -859,5 +967,122 @@ onUnmounted(() => {
 .diary-list::-webkit-scrollbar-thumb {
   background: rgba(255,105,180,0.3);
   border-radius: 2px;
+}
+
+/* 用户选择器弹窗 */
+.user-selector-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.user-selector-modal {
+  width: 280px;
+  max-height: 400px;
+  background: linear-gradient(135deg, #2d0a1e 0%, #1a0a14 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(255,105,180,0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.user-selector-header {
+  padding: 16px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255,105,180,0.2);
+  color: #ff69b4;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.user-selector-header .current-user {
+  display: block;
+  font-size: 12px;
+  color: #ff69b480;
+  margin-top: 4px;
+}
+
+.user-selector-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.user-selector-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 4px;
+}
+
+.user-selector-item:hover {
+  background: rgba(255,105,180,0.15);
+}
+
+.user-selector-item.active {
+  background: rgba(255,105,180,0.25);
+  border: 1px solid rgba(255,105,180,0.4);
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff1493, #ff69b4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-avatar span {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.user-name {
+  flex: 1;
+  color: #fff;
+  font-size: 14px;
+}
+
+.user-check {
+  color: #ff69b4;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.user-selector-close {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-top: 1px solid rgba(255,105,180,0.2);
+  background: transparent;
+  color: #ff69b480;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.user-selector-close:hover {
+  background: rgba(255,105,180,0.1);
+  color: #ff69b4;
 }
 </style>

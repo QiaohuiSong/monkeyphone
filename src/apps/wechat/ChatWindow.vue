@@ -4,7 +4,8 @@ import { ArrowLeft, MoreHorizontal, Smile, Send, SendHorizonal, Plus, X, Heart, 
 import {
   sendChatMessage,
   getWechatProfile,
-  updateChatMessage
+  updateChatMessage,
+  deleteChatMessage
 } from '../../services/wechatApi.js'
 import { getCharacterForChat, getPersonas } from '../../services/api.js'
 import { useChatStore } from '../../stores/chatStore.js'
@@ -67,6 +68,10 @@ const showActionPanel = ref(false)
 // 转账弹窗状态
 const showTransferModal = ref(false)
 const transferAmount = ref('')
+
+// 余额不足弹窗状态
+const showInsufficientModal = ref(false)
+const insufficientData = ref({ balance: 0, required: 0 })
 
 // 红包弹窗状态
 const showRedPacketModal = ref(false)
@@ -234,9 +239,11 @@ const sessionTitle = computed(() => {
 })
 
 const backgroundStyle = computed(() => {
-  if (profile.value?.chatBackground) {
+  // 优先使用聊天背景，其次使用角色立绘
+  const bgImage = profile.value?.chatBackground || character.value?.portrait
+  if (bgImage) {
     return {
-      backgroundImage: `url(${profile.value.chatBackground})`,
+      backgroundImage: `url(${bgImage})`,
       backgroundSize: 'cover',
       backgroundPosition: 'center'
     }
@@ -278,8 +285,8 @@ async function loadData() {
     profile.value = profileData
     character.value = charData
 
-    // 从 Store 加载消息（带缓存）
-    await chatStore.loadMessages(props.charId, props.sessionId)
+    // 从 Store 加载消息（强制刷新，确保显示最新消息）
+    await chatStore.loadMessages(props.charId, props.sessionId, true)
 
     // 查找绑定的人设
     if (profileData?.boundPersonaId) {
@@ -293,6 +300,7 @@ async function loadData() {
       await sendGreeting(charData.greeting)
     }
 
+    // 确保滚动到最新消息
     scrollToBottom()
   } catch (e) {
     console.error('加载数据失败:', e)
@@ -367,12 +375,21 @@ async function sendGreeting(greetingText) {
   }
 }
 
-function scrollToBottom() {
-  nextTick(() => {
+function scrollToBottom(immediate = false) {
+  const doScroll = () => {
     if (chatListRef.value) {
       chatListRef.value.scrollTop = chatListRef.value.scrollHeight
     }
-  })
+  }
+
+  if (immediate) {
+    doScroll()
+  } else {
+    nextTick(() => {
+      // 双重 nextTick 确保 DOM 完全渲染
+      nextTick(doScroll)
+    })
+  }
 }
 
 // 仅发送消息到本地（不触发AI）
@@ -463,12 +480,26 @@ function hideContextMenu(e) {
 }
 
 // 撤回消息
-function recallMessage() {
+async function recallMessage() {
   const msg = contextMenu.value.message
   if (msg) {
+    const recallText = msg.sender === 'player' ? '你撤回了一条消息' : `"${sessionTitle.value}"撤回了一条消息`
+
+    // 先更新本地状态
     msg.originalText = msg.text
     msg.type = 'recalled'
-    msg.text = msg.sender === 'player' ? '你撤回了一条消息' : `"${sessionTitle.value}"撤回了一条消息`
+    msg.text = recallText
+
+    // 同步到后端
+    try {
+      await updateChatMessage(props.charId, props.sessionId, msg.id, {
+        type: 'recalled',
+        text: recallText,
+        originalText: msg.originalText
+      })
+    } catch (e) {
+      console.error('撤回消息同步失败:', e)
+    }
   }
   contextMenu.value.visible = false
 }
@@ -480,6 +511,31 @@ function copyMessage() {
     navigator.clipboard.writeText(msg.text).catch(() => {})
   }
   contextMenu.value.visible = false
+}
+
+// 删除消息（彻底删除，不留痕迹）
+async function deleteMessage() {
+  const msg = contextMenu.value.message
+  contextMenu.value.visible = false
+
+  if (!msg) return
+
+  try {
+    // 从后端删除
+    await deleteChatMessage(props.charId, props.sessionId, msg.id)
+
+    // 从本地缓存中移除
+    const msgs = chatStore.conversations[props.charId]
+    if (msgs) {
+      const index = msgs.findIndex(m => m.id === msg.id)
+      if (index !== -1) {
+        msgs.splice(index, 1)
+      }
+    }
+  } catch (e) {
+    console.error('删除消息失败:', e)
+    alert('删除失败: ' + (e.message || '未知错误'))
+  }
 }
 
 function goBack() {
@@ -534,6 +590,17 @@ function closeTransferModal() {
   showTransferModal.value = false
 }
 
+// 显示余额不足弹窗
+function showInsufficientBalance(balance, required) {
+  insufficientData.value = { balance, required }
+  showInsufficientModal.value = true
+}
+
+// 关闭余额不足弹窗
+function closeInsufficientModal() {
+  showInsufficientModal.value = false
+}
+
 async function sendTransfer() {
   if (!transferAmount.value || parseFloat(transferAmount.value) <= 0) {
     alert('请输入转账金额')
@@ -541,8 +608,54 @@ async function sendTransfer() {
   }
 
   const amount = parseFloat(transferAmount.value).toFixed(2)
+  const numAmount = parseFloat(amount)
+
+  // 获取当前人设ID
+  const personaId = profile.value?.boundPersonaId || 'default'
 
   try {
+    // 先检查余额是否充足
+    const token = localStorage.getItem('auth_token')
+    const balanceRes = await fetch(`/api/bank/balance?personaId=${personaId}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const balanceData = await balanceRes.json()
+
+    if (balanceData.success) {
+      const currentBalance = balanceData.data.balance || 0
+      if (currentBalance < numAmount) {
+        // 显示仿真余额不足弹窗
+        showInsufficientBalance(currentBalance, numAmount)
+        return
+      }
+    }
+
+    // 扣减余额
+    const expenseRes = await fetch('/api/bank/transaction', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        type: 'expense',
+        amount: numAmount,
+        source: props.charId,
+        source_name: profile.value?.nickname || character.value?.name || '好友',
+        note: '微信转账',
+        personaId,
+        personaName: boundPersona.value?.name || '默认身份'
+      })
+    })
+
+    const expenseData = await expenseRes.json()
+    if (!expenseRes.ok) {
+      // 后端返回余额不足
+      const balance = expenseData.current_balance || 0
+      showInsufficientBalance(balance, numAmount)
+      return
+    }
+
     // 发送转账消息，初始状态为 pending（待收款）
     const msg = await sendChatMessage(
       props.charId,
@@ -604,6 +717,33 @@ async function handleOpenRedPacket(msg) {
     })
   } catch (e) {
     console.error('更新红包状态失败:', e)
+  }
+
+  // 同步存入银行账户
+  try {
+    const token = localStorage.getItem('auth_token')
+    // 获取当前绑定的人设ID和名称
+    const personaId = profile.value?.boundPersonaId || 'default'
+    const personaName = boundPersona.value?.name || '默认身份'
+
+    await fetch('/api/bank/transaction', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        type: 'income',
+        amount: msg.redpacketData?.amount || 0,
+        source: props.charId,
+        source_name: profile.value?.nickname || character.value?.name || '好友',
+        note: msg.redpacketData?.note || '微信红包',
+        personaId,
+        personaName
+      })
+    })
+  } catch (e) {
+    console.error('同步银行账户失败:', e)
   }
 }
 
@@ -841,6 +981,9 @@ function getAvatarClass(msg) {
         <div class="menu-item" @click="recallMessage">
           撤回
         </div>
+        <div class="menu-item" @click="deleteMessage">
+          删除
+        </div>
       </div>
     </Teleport>
 
@@ -1034,6 +1177,31 @@ function getAvatarClass(msg) {
       @close="closeRedPacketModal"
       @open="handleOpenRedPacket"
     />
+
+    <!-- 余额不足弹窗 -->
+    <div v-if="showInsufficientModal" class="insufficient-overlay" @click.self="closeInsufficientModal">
+      <div class="insufficient-modal">
+        <div class="insufficient-icon">
+          <div class="wallet-icon">💳</div>
+        </div>
+        <div class="insufficient-title">余额不足</div>
+        <div class="insufficient-content">
+          <div class="balance-row">
+            <span class="label">当前余额</span>
+            <span class="value">¥{{ insufficientData.balance.toFixed(2) }}</span>
+          </div>
+          <div class="balance-row required">
+            <span class="label">转账金额</span>
+            <span class="value">¥{{ insufficientData.required.toFixed(2) }}</span>
+          </div>
+          <div class="balance-row diff">
+            <span class="label">还需</span>
+            <span class="value highlight">¥{{ (insufficientData.required - insufficientData.balance).toFixed(2) }}</span>
+          </div>
+        </div>
+        <button class="insufficient-btn" @click="closeInsufficientModal">我知道了</button>
+      </div>
+    </div>
 
     <!-- 只读模式底部 -->
     <div v-if="readOnly" class="input-area readonly">
@@ -1812,5 +1980,125 @@ function getAvatarClass(msg) {
 
 .send-transfer-btn:active {
   transform: scale(0.98);
+}
+
+/* ==================== 余额不足弹窗 ==================== */
+.insufficient-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.insufficient-modal {
+  width: 85%;
+  max-width: 300px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px 20px;
+  text-align: center;
+  animation: scaleIn 0.3s ease;
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.insufficient-icon {
+  margin-bottom: 16px;
+}
+
+.wallet-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto;
+  background: linear-gradient(135deg, #ff9500 0%, #ff5e3a 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  box-shadow: 0 8px 20px rgba(255, 94, 58, 0.3);
+}
+
+.insufficient-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 20px;
+}
+
+.insufficient-content {
+  background: #f8f8f8;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.balance-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.balance-row:last-child {
+  border-bottom: none;
+}
+
+.balance-row .label {
+  font-size: 14px;
+  color: #666;
+}
+
+.balance-row .value {
+  font-size: 15px;
+  font-weight: 500;
+  color: #333;
+}
+
+.balance-row.required .value {
+  color: #ff5e3a;
+}
+
+.balance-row.diff .value.highlight {
+  color: #ff3b30;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.insufficient-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #07c160 0%, #06ad56 100%);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.insufficient-btn:active {
+  transform: scale(0.98);
+  filter: brightness(0.95);
 }
 </style>

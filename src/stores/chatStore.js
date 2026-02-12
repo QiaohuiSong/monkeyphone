@@ -77,7 +77,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
-      const result = await getChatMessages(charId, sessionId, { limit: 20 })
+      const result = await getChatMessages(charId, sessionId, { limit: 8 })
       const messages = (result.data || []).map(normalizeMessage)
       conversations[charId] = messages
       paginationInfo[charId] = {

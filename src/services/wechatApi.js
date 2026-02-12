@@ -143,6 +143,13 @@ export async function updateChatMessage(charId, sessionId, messageId, updates) {
   return data
 }
 
+export async function deleteChatMessage(charId, sessionId, messageId) {
+  const data = await request(`/api/wechat/${charId}/chats/${sessionId}/message/${messageId}`, {
+    method: 'DELETE'
+  })
+  return data
+}
+
 export async function clearChatSession(charId, sessionId) {
   await request(`/api/wechat/${charId}/chats/${sessionId}`, {
     method: 'DELETE'

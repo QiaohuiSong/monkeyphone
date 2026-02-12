@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ChevronLeft, Save, RefreshCw, Plus, Trash2, Brain } from 'lucide-vue-next'
-import { getMyCharacters } from '../../services/api.js'
+import { getMyCharacters, getCharacterForChat } from '../../services/api.js'
 import { getMemory, updateMemory, triggerSummarize } from '../../services/api.js'
 
 // 角色列表
@@ -45,7 +45,41 @@ watch(selectedCharId, async (newId) => {
 async function loadCharacters() {
   try {
     loading.value = true
-    characters.value = await getMyCharacters()
+
+    // 加载我的角色
+    const myChars = await getMyCharacters()
+    const charList = [...myChars]
+    const myCharIds = new Set(myChars.map(c => c.id))
+
+    // 加载聊过的广场角色（从 localStorage）
+    try {
+      const saved = localStorage.getItem('chatted_plaza_chars')
+      if (saved) {
+        const plazaCharIds = JSON.parse(saved)
+        for (const charId of plazaCharIds) {
+          // 跳过已是我的角色的
+          if (myCharIds.has(charId)) continue
+
+          try {
+            const charData = await getCharacterForChat(charId)
+            if (charData) {
+              charList.push({
+                id: charData.id,
+                name: charData.name,
+                avatar: charData.avatar,
+                isPlazaChar: true
+              })
+            }
+          } catch (e) {
+            console.warn(`广场角色 ${charId} 加载失败`)
+          }
+        }
+      }
+    } catch (e) {
+      console.error('加载广场角色失败:', e)
+    }
+
+    characters.value = charList
     if (characters.value.length > 0 && !selectedCharId.value) {
       selectedCharId.value = characters.value[0].id
     }
@@ -172,7 +206,7 @@ function formatDate(isoString) {
         <label class="section-label">选择角色</label>
         <select v-model="selectedCharId" class="select-input" :disabled="loading">
           <option v-for="char in characters" :key="char.id" :value="char.id">
-            {{ char.name }}
+            {{ char.name }}{{ char.isPlazaChar ? ' (广场)' : '' }}
           </option>
         </select>
       </div>

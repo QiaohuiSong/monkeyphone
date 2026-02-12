@@ -14,7 +14,8 @@ const editingPersona = ref(null)
 const editorForm = ref({
   name: '',
   avatar: '',
-  description: ''
+  description: '',
+  initialBalance: ''
 })
 
 // 删除确认
@@ -46,7 +47,8 @@ function openCreateEditor() {
   editorForm.value = {
     name: '',
     avatar: '',
-    description: ''
+    description: '',
+    initialBalance: ''
   }
   showEditor.value = true
 }
@@ -57,7 +59,8 @@ function openEditEditor(persona) {
   editorForm.value = {
     name: persona.name,
     avatar: persona.avatar || '',
-    description: persona.description || ''
+    description: persona.description || '',
+    initialBalance: persona.initialBalance !== undefined ? String(persona.initialBalance) : ''
   }
   showEditor.value = true
 }
@@ -75,24 +78,36 @@ async function savePersona() {
     return
   }
 
+  // 解析初始金额
+  const balanceStr = String(editorForm.value.initialBalance || '').trim()
+  const initialBalance = balanceStr ? parseFloat(balanceStr) : undefined
+
   try {
     if (editingPersona.value) {
       // 更新
-      await updatePersona(editingPersona.value.id, {
+      const updated = await updatePersona(editingPersona.value.id, {
         name: editorForm.value.name.trim(),
         avatar: editorForm.value.avatar,
-        description: editorForm.value.description
+        description: editorForm.value.description,
+        initialBalance: initialBalance
       })
+      // 本地响应式更新
+      const index = personas.value.findIndex(p => p.id === editingPersona.value.id)
+      if (index !== -1) {
+        personas.value[index] = updated
+      }
     } else {
       // 创建
-      await createPersona({
+      const created = await createPersona({
         name: editorForm.value.name.trim(),
         avatar: editorForm.value.avatar,
-        description: editorForm.value.description
+        description: editorForm.value.description,
+        initialBalance: initialBalance
       })
+      // 本地响应式添加
+      personas.value.push(created)
     }
     closeEditor()
-    await loadPersonas()
   } catch (e) {
     console.error('保存人设失败:', e)
     alert('保存失败: ' + e.message)
@@ -117,8 +132,9 @@ async function confirmDelete() {
 
   try {
     await deletePersona(deletingPersona.value.id)
+    // 本地响应式更新
+    personas.value = personas.value.filter(p => p.id !== deletingPersona.value.id)
     closeDeleteConfirm()
-    await loadPersonas()
   } catch (e) {
     console.error('删除人设失败:', e)
     alert('删除失败: ' + e.message)
@@ -251,8 +267,24 @@ function fileToBase64(file) {
               <textarea
                 v-model="editorForm.description"
                 placeholder="描述这个人设的背景、性格、身份等..."
-                rows="6"
+                rows="3"
               ></textarea>
+            </div>
+
+            <!-- 初始金额 -->
+            <div class="form-group">
+              <label>银行卡初始金额</label>
+              <div class="balance-input-wrapper">
+                <span class="currency-symbol">¥</span>
+                <input
+                  v-model="editorForm.initialBalance"
+                  type="number"
+                  placeholder="0.00"
+                  step="0.01"
+                  min="0"
+                />
+              </div>
+              <div class="form-hint">设置该人设银行卡的初始余额</div>
             </div>
           </div>
 
@@ -444,11 +476,14 @@ function fileToBase64(file) {
 }
 
 .modal-content {
-  width: 100%;
-  max-width: 400px;
+  width: 85%;
+  max-width: 320px;
+  max-height: 85vh;
   background: #222;
   border-radius: 16px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-header {
@@ -457,6 +492,7 @@ function fileToBase64(file) {
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .modal-header span {
@@ -485,6 +521,8 @@ function fileToBase64(file) {
 
 .modal-body {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 /* 头像上传 */
@@ -574,11 +612,58 @@ function fileToBase64(file) {
   font-family: inherit;
 }
 
+.balance-input-wrapper {
+  display: flex;
+  align-items: center;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 0 12px;
+  transition: border-color 0.2s;
+}
+
+.balance-input-wrapper:focus-within {
+  border-color: #07c160;
+}
+
+.currency-symbol {
+  color: #888;
+  font-size: 16px;
+  margin-right: 4px;
+}
+
+.balance-input-wrapper input {
+  flex: 1;
+  padding: 12px 0;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  outline: none;
+}
+
+.balance-input-wrapper input::-webkit-outer-spin-button,
+.balance-input-wrapper input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.balance-input-wrapper input[type=number] {
+  -moz-appearance: textfield;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: #666;
+  margin-top: 6px;
+}
+
 .modal-footer {
   display: flex;
   gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .btn {

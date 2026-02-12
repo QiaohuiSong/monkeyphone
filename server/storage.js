@@ -306,19 +306,19 @@ function calculateAffectionLevel(score) {
   return { level: 1, title: '陌生人' }
 }
 
-// 获取用户的所有好感度数据
-export function getAllAffections(username) {
-  return readUserData(username, 'affection.json') || {}
+// 获取用户的所有好感度数据（按 sessionId 隔离）
+export function getAllAffections(username, sessionId = 'player') {
+  return readUserData(username, `affection-${sessionId}.json`) || {}
 }
 
-// 保存好感度数据
-export function saveAllAffections(username, affections) {
-  writeUserData(username, 'affection.json', affections)
+// 保存好感度数据（按 sessionId 隔离）
+export function saveAllAffections(username, affections, sessionId = 'player') {
+  writeUserData(username, `affection-${sessionId}.json`, affections)
 }
 
 // 获取某个角色的好感度
-export function getAffection(username, charId) {
-  const affections = getAllAffections(username)
+export function getAffection(username, charId, sessionId = 'player') {
+  const affections = getAllAffections(username, sessionId)
   if (!affections[charId]) {
     // 初始化默认好感度
     return {
@@ -332,8 +332,8 @@ export function getAffection(username, charId) {
 }
 
 // 更新好感度
-export function updateAffection(username, charId, change, reason) {
-  const affections = getAllAffections(username)
+export function updateAffection(username, charId, change, reason, sessionId = 'player') {
+  const affections = getAllAffections(username, sessionId)
 
   // 获取或初始化角色好感度
   if (!affections[charId]) {
@@ -372,11 +372,12 @@ export function updateAffection(username, charId, change, reason) {
   }
 
   // 保存
-  saveAllAffections(username, affections)
+  saveAllAffections(username, affections, sessionId)
 
   // 返回更新结果
   return {
     charId,
+    sessionId,
     oldScore,
     newScore: charAffection.score,
     change,
@@ -386,6 +387,26 @@ export function updateAffection(username, charId, change, reason) {
     levelUp: level > oldLevel,
     levelDown: level < oldLevel
   }
+}
+
+// 获取用户所有可用的 sessionId 列表（从好感度文件推断）
+export function getAffectionSessionIds(username) {
+  const userDir = getUserDir(username)
+  if (!fs.existsSync(userDir)) {
+    return ['player']
+  }
+
+  const files = fs.readdirSync(userDir)
+  const sessionIds = files
+    .filter(f => f.startsWith('affection-') && f.endsWith('.json'))
+    .map(f => f.replace('affection-', '').replace('.json', ''))
+
+  // 确保至少有 player
+  if (!sessionIds.includes('player')) {
+    sessionIds.unshift('player')
+  }
+
+  return sessionIds
 }
 
 // 获取等级配置（供前端使用）

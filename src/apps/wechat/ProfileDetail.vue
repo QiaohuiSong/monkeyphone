@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ArrowLeft, ChevronRight, Trash2 } from 'lucide-vue-next'
 import { getWechatProfile, bindPersona, clearChatSession } from '../../services/wechatApi.js'
 import { getCharacterForChat, getPersonas } from '../../services/api.js'
+import { useChatStore } from '../../stores/chatStore.js'
 
 const props = defineProps({
   charId: { type: String, required: true }
@@ -10,6 +11,7 @@ const props = defineProps({
 
 const emit = defineEmits(['back', 'openChat', 'openMoments', 'openSpy'])
 
+const chatStore = useChatStore()
 const profile = ref(null)
 const character = ref(null)
 const personas = ref([])
@@ -101,6 +103,8 @@ async function confirmDeleteChat() {
   isDeleting.value = true
   try {
     await clearChatSession(props.charId, 'player')
+    // 清空本地缓存（响应式更新，无需刷新页面）
+    chatStore.clearCache(props.charId)
     closeDeleteConfirm()
     alert('聊天记录已清空')
   } catch (e) {

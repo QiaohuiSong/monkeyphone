@@ -11,12 +11,13 @@ import {
   getCharacters, saveCharacter, deleteCharacter, getCharacterById,
   getPublicCharacters, addToPublicIndex, removeFromPublicIndex,
   getCharacterChats, addCharacterChat, clearCharacterChats, findCharacterById,
-  getAffection, updateAffection, getAllAffections, getAffectionLevels
+  getAffection, updateAffection, getAllAffections, getAffectionLevels, getAffectionSessionIds
 } from './storage.js'
 import wechatRouter, { initWechatData } from './routes/wechat.js'
 import userRouter from './routes/user.js'
 import gamesRouter from './routes/games.js'
 import healthRouter from './routes/health.js'
+import bankRouter from './routes/bank.js'
 
 // 导入健康状态计算函数
 async function getHealthContextForUser(userId) {
@@ -135,8 +136,8 @@ function sendToUser(username, message) {
   return false
 }
 
-// 记忆系统配置
-const MEMORY_SUMMARIZE_THRESHOLD = 20 // 每 20 条消息触发一次摘要
+// 记忆更新锁（防止并发写入冲突）
+const memoryUpdateLocks = new Map()
 
 app.use(cors())
 app.use(express.json({ limit: '50mb' }))
@@ -153,6 +154,9 @@ app.use('/api/games', gamesRouter)
 
 // 健康管理路由
 app.use('/api/health', healthRouter)
+
+// 银行系统路由
+app.use('/api/bank', bankRouter)
 
 // ==================== 玩家朋友圈 API ====================
 
@@ -272,7 +276,7 @@ async function saveCharacterMemory(username, charId, memory) {
   await fs.writeJson(memoryPath, memory, { spaces: 2 })
 }
 
-// 增加消息计数
+// 增加消息计数（返回当前轮数）
 async function incrementMemoryMessageCount(username, charId) {
   const memory = await getCharacterMemory(username, charId)
   memory.messageCountSinceLastSummary = (memory.messageCountSinceLastSummary || 0) + 1
@@ -280,7 +284,317 @@ async function incrementMemoryMessageCount(username, charId) {
   return memory.messageCountSinceLastSummary
 }
 
-// 摘要历史记录函数
+// 获取对话轮数（总消息数 / 2）
+function getTurnsFromHistory(chatHistory) {
+  return Math.floor(chatHistory.filter(m => !m.error).length / 2)
+}
+
+// 实时记忆更新（每回合触发，基于最新一轮对话）
+async function updateMemoryRealtime(username, charId, userMessage, aiReply) {
+  const lockKey = `${username}:${charId}`
+
+  // 如果已有更新在进行中，跳过本次（后续会覆盖）
+  if (memoryUpdateLocks.get(lockKey)) {
+    console.log(`[Memory] 跳过实时更新（锁定中）: ${charId}`)
+    return { success: false, error: '更新进行中' }
+  }
+
+  memoryUpdateLocks.set(lockKey, true)
+  console.log(`[Memory] 开始实时更新: ${charId}`)
+
+  try {
+    const user = getUser(username)
+    if (!user?.api_key) {
+      console.log('[Memory] 实时更新跳过: 用户未配置 API Key')
+      return { success: false, error: '用户未配置 API Key' }
+    }
+
+    const settings = getSettings(username)
+    const model = settings.ai_model || 'gpt-3.5-turbo'
+    const existingMemory = await getCharacterMemory(username, charId)
+    const currentSummary = existingMemory.summary || ''
+
+    // 单回合实时更新 Prompt
+    const realtimePrompt = `You are maintaining the long-term memory of a character.
+
+[CURRENT MEMORY]
+"${currentSummary}"
+
+[LATEST INTERACTION]
+User: "${userMessage}"
+Character: "${aiReply}"
+
+[TASK]
+Rewrite the [CURRENT MEMORY] to include any new important facts, preferences, or relationship changes from the [LATEST INTERACTION].
+- If the new info is trivial (e.g. "Good morning", "嗯", "哦"), keep the memory unchanged.
+- Keep the total length under 500 words.
+- Merge similar information.
+- Use Chinese for the output.
+- Output ONLY the new summary text, nothing else.`
+
+    const aiRes = await fetch(`${NEWAPI_BASE_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${user.api_key}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: '你是角色记忆管理器。只输出更新后的记忆摘要文本，不要任何解释或格式标记。' },
+          { role: 'user', content: realtimePrompt }
+        ],
+        stream: false,
+        max_tokens: 800
+      })
+    })
+
+    if (!aiRes.ok) {
+      const error = await aiRes.json().catch(() => ({}))
+      console.error('[Memory] 实时更新 API 失败:', error)
+      return { success: false, error: error.error?.message || 'API 请求失败' }
+    }
+
+    const aiData = await aiRes.json()
+    const newSummary = aiData.choices[0].message.content.trim()
+
+    // 只有当摘要有实质变化时才保存
+    if (newSummary && newSummary !== currentSummary) {
+      const newMemory = {
+        ...existingMemory,
+        summary: newSummary,
+        lastUpdatedAt: new Date().toISOString()
+      }
+      await saveCharacterMemory(username, charId, newMemory)
+      console.log(`[Memory] 实时更新完成: ${charId}`)
+      return { success: true, memory: newMemory }
+    } else {
+      console.log(`[Memory] 实时更新跳过（无变化）: ${charId}`)
+      return { success: true, unchanged: true }
+    }
+  } catch (error) {
+    console.error('[Memory] 实时更新异常:', error)
+    return { success: false, error: error.message }
+  } finally {
+    memoryUpdateLocks.delete(lockKey)
+  }
+}
+
+// 增量更新记忆（追加最近的对话到 summary）- 保留用于手动触发
+async function appendMemory(username, charId) {
+  console.log(`[Memory] 开始增量更新: ${charId}`)
+  try {
+    const user = getUser(username)
+    if (!user?.api_key) {
+      console.log('[Memory] 增量更新跳过: 用户未配置 API Key')
+      return { success: false, error: '用户未配置 API Key' }
+    }
+
+    const settings = getSettings(username)
+    const model = settings.ai_model || 'gpt-3.5-turbo'
+
+    // 获取最近的聊天记录（只取最近 6 条，约 3 轮对话）
+    const chatHistory = getCharacterChats(username, charId)
+    const recentMessages = chatHistory.filter(m => !m.error).slice(-6)
+
+    if (recentMessages.length === 0) {
+      return { success: false, error: '没有新消息' }
+    }
+
+    const existingMemory = await getCharacterMemory(username, charId)
+
+    // 构建增量摘要 prompt
+    const recentText = recentMessages
+      .map(m => `${m.sender === 'user' ? '玩家' : '角色'}: ${m.text}`)
+      .join('\n')
+
+    const appendPrompt = `请将以下新对话内容整合到现有记忆中。
+
+${existingMemory.summary ? `现有剧情摘要：\n${existingMemory.summary}\n\n` : '目前没有剧情摘要。\n\n'}
+${existingMemory.facts?.length > 0 ? `现有关键事实：\n${existingMemory.facts.map(f => `- ${f.key}: ${f.value}`).join('\n')}\n\n` : ''}
+
+最新对话（需要整合）：
+${recentText}
+
+请返回 JSON 格式：
+{
+  "summary": "在现有摘要基础上追加新内容（150字以内），保持连贯性",
+  "newFacts": [
+    {"key": "新发现的关键信息", "value": "具体内容"}
+  ]
+}
+
+注意：只提取新对话中的增量信息，不要重复已有内容。newFacts 只包含新发现的事实。`
+
+    const aiRes = await fetch(`${NEWAPI_BASE_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${user.api_key}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: '你是记忆增量更新助手。简洁地将新对话融入现有记忆，不重复已有内容。只返回 JSON。' },
+          { role: 'user', content: appendPrompt }
+        ],
+        stream: false
+      })
+    })
+
+    if (!aiRes.ok) {
+      const error = await aiRes.json().catch(() => ({}))
+      console.error('[Memory] 增量更新 API 失败:', error)
+      return { success: false, error: error.error?.message || 'API 请求失败' }
+    }
+
+    const aiData = await aiRes.json()
+    const responseText = aiData.choices[0].message.content
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0])
+
+      // 合并新事实
+      let updatedFacts = existingMemory.facts || []
+      if (parsed.newFacts && Array.isArray(parsed.newFacts)) {
+        for (const newFact of parsed.newFacts) {
+          const existingIdx = updatedFacts.findIndex(f => f.key === newFact.key)
+          if (existingIdx >= 0) {
+            updatedFacts[existingIdx].value = newFact.value
+          } else {
+            updatedFacts.push(newFact)
+          }
+        }
+      }
+
+      const newMemory = {
+        ...existingMemory,
+        summary: parsed.summary || existingMemory.summary,
+        facts: updatedFacts,
+        lastAppendedAt: new Date().toISOString()
+      }
+      await saveCharacterMemory(username, charId, newMemory)
+      console.log(`[Memory] 增量更新完成: ${charId}`)
+      return { success: true, memory: newMemory }
+    }
+
+    return { success: false, error: '无法解析响应' }
+  } catch (error) {
+    console.error('[Memory] 增量更新异常:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// 深度压缩记忆（重写整个 Summary）
+async function compressMemory(username, charId) {
+  console.log(`[Memory] 开始深度压缩: ${charId}`)
+  try {
+    const user = getUser(username)
+    if (!user?.api_key) {
+      console.log('[Memory] 深度压缩跳过: 用户未配置 API Key')
+      return { success: false, error: '用户未配置 API Key' }
+    }
+
+    const settings = getSettings(username)
+    const model = settings.ai_model || 'gpt-3.5-turbo'
+
+    const chatHistory = getCharacterChats(username, charId)
+    if (!chatHistory || chatHistory.length === 0) {
+      return { success: false, error: '没有聊天记录' }
+    }
+
+    const existingMemory = await getCharacterMemory(username, charId)
+
+    // 取最近 40 条消息进行深度压缩
+    const recentMessages = chatHistory.filter(m => !m.error).slice(-40)
+    const conversationText = recentMessages
+      .map(m => `${m.sender === 'user' ? '玩家' : '角色'}: ${m.text}`)
+      .join('\n')
+
+    const compressPrompt = `请对以下对话进行深度分析和压缩，生成精炼的剧情摘要和关键事实。
+
+${existingMemory.summary ? `之前的剧情摘要（需要更新）：\n${existingMemory.summary}\n\n` : ''}
+${existingMemory.facts?.length > 0 ? `之前的关键事实（需要整理）：\n${existingMemory.facts.map(f => `- ${f.key}: ${f.value}`).join('\n')}\n\n` : ''}
+
+完整对话内容：
+${conversationText}
+
+请返回 JSON 格式：
+{
+  "summary": "完整的剧情摘要（200字以内），概括整个故事发展，包含重要转折点",
+  "facts": [
+    {"key": "关键信息类别", "value": "具体内容"}
+  ]
+}
+
+注意：
+1. summary 要完整概括整个故事，不是增量追加
+2. facts 要去重、整理、更新，保留最重要的持久性信息
+3. 删除已过时或不重要的信息`
+
+    const aiRes = await fetch(`${NEWAPI_BASE_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${user.api_key}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: '你是专业的记忆压缩助手。擅长从对话中提取核心信息，生成精炼的摘要。只返回 JSON。' },
+          { role: 'user', content: compressPrompt }
+        ],
+        stream: false
+      })
+    })
+
+    if (!aiRes.ok) {
+      const error = await aiRes.json().catch(() => ({}))
+      console.error('[Memory] 深度压缩 API 失败:', error)
+      return { success: false, error: error.error?.message || 'API 请求失败' }
+    }
+
+    const aiData = await aiRes.json()
+    const responseText = aiData.choices[0].message.content
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0])
+      const newMemory = {
+        summary: parsed.summary || existingMemory.summary,
+        facts: parsed.facts || existingMemory.facts,
+        lastCompressedAt: new Date().toISOString(),
+        lastSummarizedAt: new Date().toISOString(),
+        messageCountSinceLastSummary: 0
+      }
+      await saveCharacterMemory(username, charId, newMemory)
+      console.log(`[Memory] 深度压缩完成: ${charId}`)
+      return { success: true, memory: newMemory }
+    }
+
+    return { success: false, error: '无法解析响应' }
+  } catch (error) {
+    console.error('[Memory] 深度压缩异常:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// 后台实时记忆更新（Fire-and-forget，每回合触发）
+function runRealtimeMemoryUpdate(username, charId, userMessage, aiReply) {
+  // Fire and forget - 不阻塞响应
+  updateMemoryRealtime(username, charId, userMessage, aiReply)
+    .then(result => {
+      if (result.success && !result.unchanged) {
+        console.log(`[Memory] 后台实时更新成功: ${charId}`)
+      }
+    })
+    .catch(err => {
+      console.error(`[Memory] 后台实时更新异常: ${charId}`, err)
+    })
+}
+
+// 摘要历史记录函数（保留用于手动触发）
 export async function summarizeHistory(username, charId) {
   try {
     const user = getUser(username)
@@ -1402,8 +1716,10 @@ ${jsonTaskPrompt}`
           const reason = parsed.affection.reason || '互动'
 
           if (change !== 0) {
-            const affectionResult = updateAffection(req.user.username, charId, change, reason)
-            console.log(`[Affection] ${character.name}: ${change > 0 ? '+' : ''}${change} (${reason}) → 等级: ${affectionResult.level_title}`)
+            // 使用绑定的人设 ID 作为 sessionId，实现用户好感度隔离
+            const personaSessionId = wechatProfile?.boundPersonaId || 'player'
+            const affectionResult = updateAffection(req.user.username, charId, change, reason, personaSessionId)
+            console.log(`[Affection] ${character.name} (${personaSessionId}): ${change > 0 ? '+' : ''}${change} (${reason}) → 等级: ${affectionResult.level_title}`)
 
             // 通过 WebSocket 推送好感度更新
             sendToUser(req.user.username, {
@@ -1411,6 +1727,7 @@ ${jsonTaskPrompt}`
               data: {
                 charId,
                 charName: character.name,
+                sessionId: personaSessionId,
                 ...affectionResult
               }
             })
@@ -1426,22 +1743,16 @@ ${jsonTaskPrompt}`
       text: reply
     })
 
-    // 增加消息计数并检查是否需要自动摘要
-    const messageCount = await incrementMemoryMessageCount(req.user.username, charId)
-    if (messageCount >= MEMORY_SUMMARIZE_THRESHOLD) {
-      // 异步触发摘要，不阻塞响应
-      summarizeHistory(req.user.username, charId).then(result => {
-        if (result.success) {
-          console.log(`[Memory] 自动摘要完成: ${charId}`)
-        } else {
-          console.error(`[Memory] 自动摘要失败: ${result.error}`)
-        }
-      }).catch(err => {
-        console.error('[Memory] 自动摘要异常:', err)
-      })
-    }
-
+    // 立即返回响应给前端，不阻塞用户
     res.json({ success: true, data: aiMessage })
+
+    // ========== 后台实时记忆更新（Fire-and-forget）==========
+    // 响应已发送，以下操作在后台静默执行
+    // 每回合都更新记忆，让 AI "过目不忘"
+    setImmediate(() => {
+      runRealtimeMemoryUpdate(req.user.username, charId, message, reply)
+    })
+
   } catch (error) {
     const errorMessage = addCharacterChat(req.user.username, charId, {
       sender: 'ai',
@@ -1485,7 +1796,7 @@ app.get('/api/characters/:id/export/json', authMiddleware, (req, res) => {
 
 // 导入角色（JSON 格式）
 app.post('/api/characters/import/json', authMiddleware, (req, res) => {
-  const { name, avatar, portrait, bio, persona, greeting } = req.body
+  const { name, avatar, portrait, bio, persona, greeting, npcs } = req.body
 
   if (!name) {
     return res.status(400).json({ error: '角色名称不能为空' })
@@ -1499,6 +1810,7 @@ app.post('/api/characters/import/json', authMiddleware, (req, res) => {
     bio: bio || '',
     persona: persona || '',
     greeting: greeting || '',
+    npcs: npcs || [],
     isPublic: false
   })
 
@@ -1507,15 +1819,17 @@ app.post('/api/characters/import/json', authMiddleware, (req, res) => {
 
 // ==================== 好感度 API ====================
 
-// 获取所有角色的好感度
+// 获取所有角色的好感度（支持 sessionId 隔离）
 app.get('/api/affection', authMiddleware, (req, res) => {
-  const affections = getAllAffections(req.user.username)
+  const sessionId = req.query.sessionId || 'player'
+  const affections = getAllAffections(req.user.username, sessionId)
   res.json({ success: true, data: affections })
 })
 
 // 获取某个角色的好感度
 app.get('/api/affection/:charId', authMiddleware, (req, res) => {
-  const affection = getAffection(req.user.username, req.params.charId)
+  const sessionId = req.query.sessionId || 'player'
+  const affection = getAffection(req.user.username, req.params.charId, sessionId)
   res.json({ success: true, data: affection })
 })
 
@@ -1523,6 +1837,12 @@ app.get('/api/affection/:charId', authMiddleware, (req, res) => {
 app.get('/api/affection-levels', authMiddleware, (req, res) => {
   const levels = getAffectionLevels()
   res.json({ success: true, data: levels })
+})
+
+// 获取所有可用的 sessionId 列表
+app.get('/api/affection-sessions', authMiddleware, (req, res) => {
+  const sessionIds = getAffectionSessionIds(req.user.username)
+  res.json({ success: true, data: sessionIds })
 })
 
 // 启动服务器（使用 HTTP server 以支持 WebSocket）

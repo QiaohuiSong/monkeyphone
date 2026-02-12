@@ -19,12 +19,20 @@ export function verifyToken(token) {
 }
 
 export function authMiddleware(req, res, next) {
+  // 优先从 header 获取 token，其次从 query 参数获取（用于文件下载等场景）
+  let token = null
+
   const authHeader = req.headers.authorization
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7)
+  } else if (req.query.token) {
+    token = req.query.token
+  }
+
+  if (!token) {
     return res.status(401).json({ error: '未登录' })
   }
 
-  const token = authHeader.slice(7)
   const decoded = verifyToken(token)
 
   if (!decoded) {

@@ -42,7 +42,7 @@ router.get('/personas', authMiddleware, async (req, res) => {
 router.post('/personas', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username
-    const { name, avatar, description } = req.body
+    const { name, avatar, description, initialBalance } = req.body
 
     if (!name) {
       return res.status(400).json({ error: '人设名称不能为空' })
@@ -56,6 +56,7 @@ router.post('/personas', authMiddleware, async (req, res) => {
       name,
       avatar: avatar || '',
       description: description || '',
+      initialBalance: initialBalance !== undefined ? parseFloat(initialBalance) : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
@@ -75,7 +76,7 @@ router.put('/personas/:id', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username
     const { id } = req.params
-    const { name, avatar, description } = req.body
+    const { name, avatar, description, initialBalance } = req.body
 
     const personasPath = await ensurePersonasFile(username)
     const personas = await fs.readJson(personasPath)
@@ -90,6 +91,7 @@ router.put('/personas/:id', authMiddleware, async (req, res) => {
     if (name !== undefined) persona.name = name
     if (avatar !== undefined) persona.avatar = avatar
     if (description !== undefined) persona.description = description
+    if (initialBalance !== undefined) persona.initialBalance = parseFloat(initialBalance)
     persona.updatedAt = new Date().toISOString()
 
     personas[index] = persona

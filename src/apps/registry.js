@@ -1,5 +1,5 @@
 import { shallowRef } from 'vue'
-import { Settings, Users, MessageSquare, Brain, Gamepad2, Palette, Flower2 } from 'lucide-vue-next'
+import { Settings, Users, MessageSquare, Brain, Gamepad2, Palette, Flower2, Wallet, Smartphone } from 'lucide-vue-next'
 import SettingsApp from './settings/SettingsApp.vue'
 import CharacterApp from './character/CharacterApp.vue'
 import WeChatApp from './wechat/WeChatApp.vue'
@@ -9,6 +9,8 @@ import ThemeStudio from './themestudio/ThemeStudio.vue'
 import CycleApp from './health/CycleApp.vue'
 import LoveSparkApp from './love-spark/LoveSparkApp.vue'
 import HeartFireIcon from './love-spark/HeartFireIcon.vue'
+import WalletApp from './bank/WalletApp.vue'
+import SnakeApp from './snake/SnakeApp.vue'
 
 export const installedApps = shallowRef([
   // Dock 栏 (前4个): 角色卡, 美化, 记忆, 设置
@@ -68,6 +70,20 @@ export const installedApps = shallowRef([
     icon: HeartFireIcon,
     color: '#ff1493',
     component: LoveSparkApp
+  },
+  {
+    id: 'wallet',
+    name: '钱包',
+    icon: Wallet,
+    color: '#667eea',
+    component: WalletApp
+  },
+  {
+    id: 'snake',
+    name: 'Snake',
+    icon: Smartphone,
+    color: '#22c55e',
+    component: SnakeApp
   }
 ])
 

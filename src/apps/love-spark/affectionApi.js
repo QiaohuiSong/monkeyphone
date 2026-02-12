@@ -31,20 +31,26 @@ async function request(path, options = {}) {
   return data
 }
 
-// 获取所有角色的好感度
-export async function getAllAffections() {
-  const data = await request('/api/affection')
+// 获取所有角色的好感度（支持 sessionId 隔离）
+export async function getAllAffections(sessionId = 'player') {
+  const data = await request(`/api/affection?sessionId=${encodeURIComponent(sessionId)}`)
   return data.data
 }
 
 // 获取某个角色的好感度
-export async function getAffection(charId) {
-  const data = await request(`/api/affection/${charId}`)
+export async function getAffection(charId, sessionId = 'player') {
+  const data = await request(`/api/affection/${charId}?sessionId=${encodeURIComponent(sessionId)}`)
   return data.data
 }
 
 // 获取好感度等级配置
 export async function getAffectionLevels() {
   const data = await request('/api/affection-levels')
+  return data.data
+}
+
+// 获取所有可用的 sessionId 列表
+export async function getAffectionSessions() {
+  const data = await request('/api/affection-sessions')
   return data.data
 }
