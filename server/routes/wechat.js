@@ -612,8 +612,9 @@ router.delete('/:charId/chats/:sessionId/message/:messageId', authMiddleware, as
       })
 
       await fs.writeFile(chatPath, updatedLines.join('\n') + (updatedLines.length > 0 ? '\n' : ''), 'utf-8')
-      res.json({ success: true })
     })
+
+    res.json({ success: true })
   } catch (error) {
     console.error('删除消息失败:', error)
     res.status(500).json({ error: error.message || '删除消息失败' })

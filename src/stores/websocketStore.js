@@ -12,9 +12,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   // 重连配置
   const RECONNECT_DELAY = 5000        // 普通重连延迟
-  const BACKGROUND_TIMEOUT = 5 * 60 * 1000  // 后台5分钟后才断开
+  const BACKGROUND_TIMEOUT = 30 * 60 * 1000  // 后台30分钟后才断开
   let backgroundTimer = null
   let reconnectTimer = null
+  let heartbeatTimer = null
 
   // 获取用户名
   function getUsername() {
@@ -55,6 +56,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
       if (username) {
         ws.value.send(JSON.stringify({ type: 'auth', username }))
       }
+
+      // 启动心跳保持连接活跃
+      startHeartbeat()
     }
 
     ws.value.onmessage = (event) => {
@@ -95,6 +99,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
       console.log('[WebSocket] 已断开')
       isConnected.value = false
 
+      // 停止心跳
+      stopHeartbeat()
+
       // 清除之前的重连计时器
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
@@ -110,8 +117,26 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
   }
 
+  // 心跳机制 - 保持连接活跃
+  function startHeartbeat() {
+    stopHeartbeat()
+    heartbeatTimer = setInterval(() => {
+      if (ws.value && ws.value.readyState === WebSocket.OPEN) {
+        ws.value.send(JSON.stringify({ type: 'ping' }))
+      }
+    }, 30000) // 每30秒发送一次心跳
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
   // 断开连接
   function disconnect() {
+    stopHeartbeat()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -125,33 +150,22 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   // 页面可见性变化处理
   function handleVisibilityChange() {
-    const wasVisible = isPageVisible.value
     isPageVisible.value = !document.hidden
 
     if (isPageVisible.value) {
-      // 页面变为可见
-      console.log('[WebSocket] 页面可见，检查连接状态')
-
-      // 清除后台断开计时器
+      // 页面变为可见 - 只清除后台断开计时器，不主动重连
       if (backgroundTimer) {
         clearTimeout(backgroundTimer)
         backgroundTimer = null
       }
-
-      // 如果连接已断开，立即重连
-      if (!isConnected.value && getUsername()) {
-        connect()
-      }
+      // 不再主动重连，避免触发界面刷新
     } else {
       // 页面变为不可见（切换到后台）
-      console.log('[WebSocket] 页面切换到后台，将在5分钟后断开连接')
-
       // 设置后台超时断开计时器
       if (backgroundTimer) {
         clearTimeout(backgroundTimer)
       }
       backgroundTimer = setTimeout(() => {
-        console.log('[WebSocket] 后台超时，断开连接')
         disconnect()
       }, BACKGROUND_TIMEOUT)
     }
