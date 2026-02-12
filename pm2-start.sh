@@ -82,24 +82,35 @@ fi
 
 echo ""
 
+# ============ 构建前端 ============
+
+echo "[构建前端]"
+
+# 检查是否需要重新构建
+if [ ! -d "$SCRIPT_DIR/dist" ]; then
+    echo "📦 构建前端..."
+    npm run build
+    if [ $? -ne 0 ]; then
+        echo "❌ 前端构建失败"
+        exit 1
+    fi
+    echo "✅ 前端构建完成"
+else
+    echo "✅ 前端已构建（如需重新构建请先删除 dist 目录）"
+fi
+
+echo ""
+
 # ============ 启动服务 ============
 
 echo "[启动服务]"
 
 # 停止可能存在的旧进程
 pm2 delete monkeyphone-backend 2>/dev/null
-pm2 delete monkeyphone-frontend 2>/dev/null
 
-# 启动后端服务
+# 启动后端服务（同时托管前端静态文件）
 echo "启动后端服务..."
 pm2 start "$SCRIPT_DIR/server/index.js" --name "monkeyphone-backend" --cwd "$SCRIPT_DIR/server"
-
-# 等待后端启动
-sleep 2
-
-# 启动前端服务
-echo "启动前端服务..."
-pm2 start npm --name "monkeyphone-frontend" --cwd "$SCRIPT_DIR" -- run dev
 
 # 保存 PM2 配置
 pm2 save
@@ -109,17 +120,15 @@ echo "================================"
 echo "  🎉 服务启动成功！"
 echo "================================"
 echo ""
-echo "  🌐 前端: http://localhost:5173"
-echo "  🔧 后端: http://localhost:3000"
+echo "  🌐 访问地址: http://localhost:3000"
 echo ""
 echo "  📋 PM2 常用命令:"
 echo "     查看状态: pm2 status"
-echo "     查看日志: pm2 logs"
-echo "     后端日志: pm2 logs monkeyphone-backend"
-echo "     前端日志: pm2 logs monkeyphone-frontend"
+echo "     查看日志: pm2 logs monkeyphone-backend"
 echo "     监控面板: pm2 monit"
 echo ""
 echo "  🛑 停止服务: ./pm2-stop.sh"
+echo "  🔄 重新构建: rm -rf dist && ./pm2-start.sh"
 echo ""
 
 # 显示当前状态
