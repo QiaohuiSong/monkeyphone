@@ -144,8 +144,11 @@ app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
 // 托管前端静态文件（生产模式）
-const distPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'dist')
-app.use(express.static(distPath)))
+import { fileURLToPath } from 'url'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const distPath = path.join(__dirname, '..', 'dist')
+app.use(express.static(distPath))
 
 // 微信仿真路由
 app.use('/api/wechat', wechatRouter)
@@ -1851,7 +1854,6 @@ app.get('/api/affection-sessions', authMiddleware, (req, res) => {
 
 // SPA 路由回退（所有非 API 请求返回 index.html）
 app.get('*', (req, res) => {
-  const distPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'dist')
   res.sendFile(path.join(distPath, 'index.html'))
 })
 
