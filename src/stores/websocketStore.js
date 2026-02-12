@@ -153,15 +153,19 @@ export const useWebSocketStore = defineStore('websocket', () => {
     isPageVisible.value = !document.hidden
 
     if (isPageVisible.value) {
-      // 页面变为可见 - 只清除后台断开计时器，不主动重连
+      // 页面变为可见 - 清除后台断开计时器，恢复心跳
       if (backgroundTimer) {
         clearTimeout(backgroundTimer)
         backgroundTimer = null
       }
-      // 不再主动重连，避免触发界面刷新
+      // 恢复心跳（如果已连接）
+      if (isConnected.value) {
+        startHeartbeat()
+      }
     } else {
-      // 页面变为不可见（切换到后台）
-      // 设置后台超时断开计时器
+      // 页面变为不可见 - 暂停心跳，设置超时断开
+      stopHeartbeat()
+
       if (backgroundTimer) {
         clearTimeout(backgroundTimer)
       }

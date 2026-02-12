@@ -38,11 +38,34 @@ watch(
   { immediate: true }
 )
 
-let timer
-onMounted(() => {
+let timer = null
+
+function startTimer() {
+  if (timer) return
   timer = setInterval(() => {
     currentTime.value = dayjs().format('HH:mm')
   }, 1000)
+}
+
+function stopTimer() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopTimer()
+  } else {
+    currentTime.value = dayjs().format('HH:mm')
+    startTimer()
+  }
+}
+
+onMounted(() => {
+  startTimer()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 
   // 初始化时应用自定义 CSS
   if (systemStore.customCSS) {
@@ -51,7 +74,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  clearInterval(timer)
+  stopTimer()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   // 清理 style 标签
   if (styleElement && styleElement.parentNode) {
     styleElement.parentNode.removeChild(styleElement)

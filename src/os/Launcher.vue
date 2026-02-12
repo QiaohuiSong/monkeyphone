@@ -33,16 +33,40 @@ function openApp(appId) {
 const currentTime = ref(dayjs().format('HH:mm'))
 const currentDate = computed(() => dayjs().format('M月D日 dddd'))
 
-let timer
-onMounted(() => {
+let timer = null
+
+function startTimer() {
+  if (timer) return
   timer = setInterval(() => {
     currentTime.value = dayjs().format('HH:mm')
   }, 1000)
+}
+
+function stopTimer() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopTimer()
+  } else {
+    currentTime.value = dayjs().format('HH:mm')
+    startTimer()
+  }
+}
+
+onMounted(() => {
+  startTimer()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   fetchWeather()
 })
 
 onUnmounted(() => {
-  clearInterval(timer)
+  stopTimer()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 // 天气数据
