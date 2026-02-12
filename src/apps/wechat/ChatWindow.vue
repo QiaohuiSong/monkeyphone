@@ -285,8 +285,8 @@ async function loadData() {
     profile.value = profileData
     character.value = charData
 
-    // 从 Store 加载消息（强制刷新，确保显示最新消息）
-    await chatStore.loadMessages(props.charId, props.sessionId, true)
+    // 从 Store 加载消息（如果缓存中有数据则使用缓存，避免界面闪烁）
+    await chatStore.loadMessages(props.charId, props.sessionId, false)
 
     // 查找绑定的人设
     if (profileData?.boundPersonaId) {
