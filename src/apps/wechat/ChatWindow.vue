@@ -11,7 +11,7 @@ import { getCharacterForChat, getPersonas } from '../../services/api.js'
 import { useChatStore } from '../../stores/chatStore.js'
 import TransferBubble from './TransferBubble.vue'
 import RedPacketBubble from './RedPacketBubble.vue'
-import RedPacketOpenModal from './RedPacketOpenModal.vue'
+import PrivateRedPacketModal from './PrivateRedPacketModal.vue'
 
 const props = defineProps({
   charId: { type: String, required: true },
@@ -1169,7 +1169,7 @@ function getAvatarClass(msg) {
     </div>
 
     <!-- 红包开启弹窗 -->
-    <RedPacketOpenModal
+    <PrivateRedPacketModal
       :visible="showRedPacketModal"
       :message="currentRedPacketMsg"
       :sender-name="profile?.nickname || character?.name || '好友'"

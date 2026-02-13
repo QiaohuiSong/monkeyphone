@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { MessageCircle, Users, Compass, User, Plus } from 'lucide-vue-next'
+import { MessageCircle, Users, Compass, User } from 'lucide-vue-next'
 import { getMyCharacters, getPlazaCharacters, getCharacterForChat, getGroups, createGroup, getPersonas } from '../../services/api.js'
 import { useChatStore } from '../../stores/chatStore.js'
 
@@ -641,9 +641,6 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
                 <span v-else>{{ char.name?.[0] || '?' }}</span>
               </div>
               <div class="contact-name">{{ char.name }}</div>
-              <button class="create-group-btn" @click.stop="openMemberSelector(char.id)" title="发起群聊">
-                <Plus :size="18" />
-              </button>
             </div>
           </div>
         </div>
@@ -903,25 +900,6 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
   font-size: 16px;
   color: #000;
   flex: 1;
-}
-
-/* 发起群聊按钮 */
-.create-group-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 6px;
-  background: #f0f0f0;
-  color: #07c160;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.create-group-btn:active {
-  background: #e0e0e0;
 }
 
 /* 发现 */

@@ -3,12 +3,15 @@ import { computed } from 'vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
-  packet: { type: Object, default: null }, // 红包数据（从缓存获取）
+  packet: { type: Object, default: null }, // 群红包数据（从缓存获取）
   currentUserId: { type: String, default: 'user' },
   isOwn: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['click'])
+
+// 判断是否为群红包（有 packet 数据）
+const isGroupPacket = computed(() => !!props.packet)
 
 // 红包祝福语
 const wishes = computed(() => {
@@ -16,39 +19,63 @@ const wishes = computed(() => {
   const text = props.message.text || ''
   const match = text.match(/\[红包\]\s*(.+)/)
   if (match) return match[1]
-  return props.packet?.wishes || '恭喜发财，大吉大利'
+
+  // 群红包使用 packet.wishes
+  if (isGroupPacket.value) {
+    return props.packet?.wishes || '恭喜发财，大吉大利'
+  }
+
+  // 私聊红包使用 redpacketData.note
+  return props.message.redpacketData?.note || '恭喜发财，大吉大利'
 })
 
-// 红包状态
+// 红包状态（区分群红包和私聊红包）
 const packetStatus = computed(() => {
-  if (!props.packet) return 'unknown'
+  // 群红包逻辑
+  if (isGroupPacket.value) {
+    // 检查是否已被抢光
+    if (props.packet.remain_num <= 0) return 'finished'
 
-  // 检查是否已被抢光
-  if (props.packet.remain_num <= 0) return 'finished'
+    // 检查是否过期
+    if (Date.now() > props.packet.expired_at) return 'expired'
 
-  // 检查是否过期
-  if (Date.now() > props.packet.expired_at) return 'expired'
+    // 检查自己是否已领取
+    const myRecord = props.packet.records?.find(r => r.user_id === props.currentUserId)
+    if (myRecord) return 'grabbed'
 
-  // 检查自己是否已领取
-  const myRecord = props.packet.records?.find(r => r.user_id === props.currentUserId)
-  if (myRecord) return 'grabbed'
+    return 'available'
+  }
+
+  // 私聊红包逻辑
+  const status = props.message.redpacketData?.status
+  if (status === 'opened') return 'opened'
+  if (status === 'unclaimed') return 'available'
 
   return 'available'
 })
 
 // 是否显示为已领取/不可领状态（半透明）
 const isInactive = computed(() => {
-  return ['finished', 'expired', 'grabbed'].includes(packetStatus.value)
+  if (isGroupPacket.value) {
+    return ['finished', 'expired', 'grabbed'].includes(packetStatus.value)
+  }
+  // 私聊红包：已打开状态
+  return packetStatus.value === 'opened'
 })
 
 // 状态文字
 const statusText = computed(() => {
-  switch (packetStatus.value) {
-    case 'grabbed': return '已领取'
-    case 'finished': return '已被领完'
-    case 'expired': return '已过期'
-    default: return ''
+  if (isGroupPacket.value) {
+    switch (packetStatus.value) {
+      case 'grabbed': return '已领取'
+      case 'finished': return '已被领完'
+      case 'expired': return '已过期'
+      default: return ''
+    }
   }
+  // 私聊红包
+  if (packetStatus.value === 'opened') return '已领取'
+  return ''
 })
 
 function handleClick() {

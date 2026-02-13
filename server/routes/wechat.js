@@ -509,39 +509,22 @@ router.get('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
     let messages = []
     let total = 0
 
-    // player 会话：从主聊天记录读取（char_chats/{charId}.json）
-    if (sessionId === 'player') {
-      const charChatsPath = path.join('./data', username, 'char_chats', `${charId}.json`)
-      if (await fs.pathExists(charChatsPath)) {
-        const chats = await fs.readJson(charChatsPath)
-        // 转换格式以匹配前端期望
-        // sender: 'user' -> 玩家发的消息
-        // sender: 'ai' 或其他 -> 角色发的消息，统一转为 'character'
-        messages = chats.map((msg, idx) => ({
-          ...msg,
-          _index: idx,
-          sender: msg.sender === 'user' ? 'user' : 'character'
-        }))
-        total = messages.length
-      }
-    } else {
-      // 其他会话：从 wechat/chats/{sessionId}.jsonl 读取
-      const { chatsDir } = await ensureWechatStructure(username, charId)
-      const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
+    // 所有会话统一从 wechat/chats/{sessionId}.jsonl 读取
+    const { chatsDir } = await ensureWechatStructure(username, charId)
+    const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
 
-      if (await fs.pathExists(chatPath)) {
-        const content = await fs.readFile(chatPath, 'utf-8')
-        const lines = content.split('\n').filter(line => line.trim())
-        total = lines.length
+    if (await fs.pathExists(chatPath)) {
+      const content = await fs.readFile(chatPath, 'utf-8')
+      const lines = content.split('\n').filter(line => line.trim())
+      total = lines.length
 
-        for (let i = 0; i < lines.length; i++) {
-          try {
-            const msg = JSON.parse(lines[i])
-            msg._index = i
-            messages.push(msg)
-          } catch {
-            // 跳过解析失败的行
-          }
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const msg = JSON.parse(lines[i])
+          msg._index = i
+          messages.push(msg)
+        } catch {
+          // 跳过解析失败的行
         }
       }
     }

@@ -20,6 +20,71 @@ import healthRouter from './routes/health.js'
 import bankRouter from './routes/bank.js'
 import groupsRouter from './routes/groups.js'
 
+// ==================== AI 输出清洗函数 ====================
+// 防止模型泄露思考过程，破坏角色扮演沉浸感
+function sanitizeAIResponse(text) {
+  if (!text || typeof text !== 'string') return text
+
+  let cleaned = text
+
+  // 1. 移除 <think>...</think> 标签及内容（各种变体）
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  cleaned = cleaned.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+  cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+  cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+  cleaned = cleaned.replace(/<analysis>[\s\S]*?<\/analysis>/gi, '')
+  cleaned = cleaned.replace(/<internal>[\s\S]*?<\/internal>/gi, '')
+
+  // 2. 移除常见的思考过程标记行
+  const thinkingPatterns = [
+    /^.*STREAMING THOUGHTS.*$/gim,
+    /^.*Analyze the User's Message.*$/gim,
+    /^.*\[Internal Thought\].*$/gim,
+    /^.*\[思考\].*$/gim,
+    /^.*\[分析\].*$/gim,
+    /^.*\[内心独白\].*$/gim,
+    /^.*Let me think.*$/gim,
+    /^.*Let's analyze.*$/gim,
+    /^.*I should respond.*$/gim,
+    /^.*I need to.*$/gim,
+    /^.*As an AI.*$/gim,
+    /^.*As a language model.*$/gim,
+    /^.*My response strategy.*$/gim,
+    /^.*Response Strategy.*$/gim,
+    /^.*Character Analysis.*$/gim,
+    /^.*User Intent.*$/gim,
+    /^.*Emotional State.*$/gim,
+    /^.*Relationship Status.*$/gim,
+    /^.*I'll respond.*$/gim,
+    /^.*Now I'll.*$/gim,
+    /^.*Here's my response.*$/gim,
+    /^.*\*thinks\*.*$/gim,
+    /^.*\*thinking\*.*$/gim,
+  ]
+
+  for (const pattern of thinkingPatterns) {
+    cleaned = cleaned.replace(pattern, '')
+  }
+
+  // 3. 移除 Markdown 风格的思考块
+  cleaned = cleaned.replace(/```thinking[\s\S]*?```/gi, '')
+  cleaned = cleaned.replace(/```thought[\s\S]*?```/gi, '')
+  cleaned = cleaned.replace(/```analysis[\s\S]*?```/gi, '')
+
+  // 4. 移除多余的空行（超过2个连续换行变成2个）
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
+
+  // 5. 去除首尾空白
+  cleaned = cleaned.trim()
+
+  // 如果清洗后为空，返回一个默认响应
+  if (!cleaned) {
+    cleaned = '...'
+  }
+
+  return cleaned
+}
+
 // 导入健康状态计算函数
 async function getHealthContextForUser(userId) {
   try {
@@ -1554,6 +1619,10 @@ ${jsonTaskPrompt}`
 
     const aiData = await aiRes.json()
     let reply = aiData.choices[0].message.content
+
+    // ========== 输出清洗 (Sanitization) ==========
+    // 防止模型泄露思考过程，破坏角色扮演沉浸感
+    reply = sanitizeAIResponse(reply)
 
     // 解析 JSON 响应
     try {
