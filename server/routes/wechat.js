@@ -366,20 +366,65 @@ router.delete('/:charId/moments/:momentId', authMiddleware, async (req, res) => 
 })
 
 // 获取聊天会话列表 (偷看模式)
+// 只返回：player对话、NPC组成员对话、群聊
 router.get('/:charId/sessions', authMiddleware, async (req, res) => {
   try {
     const { charId } = req.params
     const username = req.user.username
     const { chatsDir } = await ensureWechatStructure(username, charId)
 
+    // 获取角色的NPC组成员ID列表
+    const character = findCharacterById(charId)
+    const npcIds = new Set()
+    if (character && character.npcs && Array.isArray(character.npcs)) {
+      for (const npc of character.npcs) {
+        if (npc.id) {
+          npcIds.add(npc.id)
+        }
+      }
+    }
+
+    // 获取该角色参与的群聊ID列表
+    const groupsDir = path.join('./data', username, 'groups')
+    const groupIds = new Set()
+    try {
+      if (await fs.pathExists(groupsDir)) {
+        const groupFiles = await fs.readdir(groupsDir)
+        for (const file of groupFiles) {
+          if (file.endsWith('.json')) {
+            const groupPath = path.join(groupsDir, file)
+            const group = await fs.readJson(groupPath)
+            // 检查角色是否是群成员
+            if (group.members && group.members.some(m => m.id === charId)) {
+              groupIds.add(group.id)
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('读取群列表失败:', e)
+    }
+
     const files = await fs.readdir(chatsDir)
     const sessions = []
+
+    // 允许的会话类型
+    const allowedSessionIds = new Set(['player', 'npc_team'])
 
     for (const f of files) {
       if (!f.endsWith('.jsonl')) continue
 
       const sessionId = f.replace('.jsonl', '')
       const chatPath = path.join(chatsDir, f)
+
+      // 检查是否是允许的会话
+      const isAllowed = allowedSessionIds.has(sessionId) ||
+                        npcIds.has(sessionId) ||
+                        groupIds.has(sessionId)
+
+      if (!isAllowed) {
+        continue // 跳过不允许的会话
+      }
 
       // 读取第一条消息获取会话名称
       let sessionName = sessionId
@@ -403,11 +448,46 @@ router.get('/:charId/sessions', authMiddleware, async (req, res) => {
         'npc_team': '微信团队'
       }
 
+      // 如果是NPC，从角色数据获取名称
+      if (npcIds.has(sessionId) && character?.npcs) {
+        const npc = character.npcs.find(n => n.id === sessionId)
+        if (npc) {
+          sessionName = npc.name
+        }
+      }
+
+      // 如果是群聊，标记类型
+      let sessionType = 'chat'
+      if (groupIds.has(sessionId)) {
+        sessionType = 'group'
+        sessionName = `[群聊] ${sessionName}`
+      }
+
       sessions.push({
         id: sessionId,
         name: nameMap[sessionId] || sessionName,
+        type: sessionType,
         filename: f
       })
+    }
+
+    // 添加群聊会话（如果有的话）
+    for (const groupId of groupIds) {
+      // 检查是否已经添加过（通过chats目录）
+      if (!sessions.find(s => s.id === groupId)) {
+        try {
+          const groupPath = path.join(groupsDir, `${groupId}.json`)
+          const group = await fs.readJson(groupPath)
+          sessions.push({
+            id: groupId,
+            name: `[群聊] ${group.name}`,
+            type: 'group',
+            filename: null
+          })
+        } catch (e) {
+          // 忽略
+        }
+      }
     }
 
     res.json({ success: true, data: sessions })
@@ -423,21 +503,48 @@ router.get('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
     const { charId, sessionId } = req.params
     const { limit, beforeIndex } = req.query
     const username = req.user.username
-    const { chatsDir } = await ensureWechatStructure(username, charId)
-    const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
 
     console.log(`[Chat API] charId=${charId}, sessionId=${sessionId}, limit=${limit}, beforeIndex=${beforeIndex}`)
 
-    if (!await fs.pathExists(chatPath)) {
-      if (sessionId === 'player') {
-        await fs.writeFile(chatPath, '', 'utf-8')
-      }
-      return res.json({ success: true, data: [], hasMore: false, total: 0, nextIndex: 0 })
-    }
+    let messages = []
+    let total = 0
 
-    const content = await fs.readFile(chatPath, 'utf-8')
-    const lines = content.split('\n').filter(line => line.trim())
-    const total = lines.length
+    // player 会话：从主聊天记录读取（char_chats/{charId}.json）
+    if (sessionId === 'player') {
+      const charChatsPath = path.join('./data', username, 'char_chats', `${charId}.json`)
+      if (await fs.pathExists(charChatsPath)) {
+        const chats = await fs.readJson(charChatsPath)
+        // 转换格式以匹配前端期望
+        // sender: 'user' -> 玩家发的消息
+        // sender: 'ai' 或其他 -> 角色发的消息，统一转为 'character'
+        messages = chats.map((msg, idx) => ({
+          ...msg,
+          _index: idx,
+          sender: msg.sender === 'user' ? 'user' : 'character'
+        }))
+        total = messages.length
+      }
+    } else {
+      // 其他会话：从 wechat/chats/{sessionId}.jsonl 读取
+      const { chatsDir } = await ensureWechatStructure(username, charId)
+      const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
+
+      if (await fs.pathExists(chatPath)) {
+        const content = await fs.readFile(chatPath, 'utf-8')
+        const lines = content.split('\n').filter(line => line.trim())
+        total = lines.length
+
+        for (let i = 0; i < lines.length; i++) {
+          try {
+            const msg = JSON.parse(lines[i])
+            msg._index = i
+            messages.push(msg)
+          } catch {
+            // 跳过解析失败的行
+          }
+        }
+      }
+    }
 
     if (total === 0) {
       return res.json({ success: true, data: [], hasMore: false, total: 0, nextIndex: 0 })
@@ -464,27 +571,16 @@ router.get('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
         hasMore = startIndex > 0
         nextIdx = startIndex
       }
+
+      // 裁剪消息数组
+      messages = messages.slice(startIndex, endIndex)
     } else {
       // 无分页，返回全部
-      startIndex = 0
-      endIndex = total
       hasMore = false
       nextIdx = 0
     }
 
-    console.log(`[Chat API] startIndex=${startIndex}, endIndex=${endIndex}, hasMore=${hasMore}`)
-
-    // 只解析需要的行
-    const messages = []
-    for (let i = startIndex; i < endIndex; i++) {
-      try {
-        const msg = JSON.parse(lines[i])
-        msg._index = i
-        messages.push(msg)
-      } catch {
-        // 跳过解析失败的行
-      }
-    }
+    console.log(`[Chat API] returning ${messages.length} messages, hasMore=${hasMore}`)
 
     res.json({ success: true, data: messages, hasMore, total, nextIndex: nextIdx })
   } catch (error) {

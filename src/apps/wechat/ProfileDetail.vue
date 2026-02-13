@@ -9,7 +9,7 @@ const props = defineProps({
   charId: { type: String, required: true }
 })
 
-const emit = defineEmits(['back', 'openChat', 'openMoments', 'openSpy'])
+const emit = defineEmits(['back', 'openChat', 'openMoments', 'openSpy', 'createGroupChat'])
 
 const chatStore = useChatStore()
 const profile = ref(null)
@@ -62,6 +62,11 @@ function openMoments() {
 
 function openSpy() {
   emit('openSpy', props.charId)
+}
+
+// 发起群聊
+function createGroupChat() {
+  emit('createGroupChat', props.charId)
 }
 
 // 打开人设选择器
@@ -186,6 +191,9 @@ async function confirmDeleteChat() {
     <div class="bottom-actions">
       <button class="action-btn primary" @click="openChat">
         发消息
+      </button>
+      <button class="action-btn secondary" @click="createGroupChat">
+        发起群聊
       </button>
     </div>
 
@@ -406,10 +414,12 @@ async function confirmDeleteChat() {
 .bottom-actions {
   margin-top: auto;
   padding: 16px;
+  display: flex;
+  gap: 12px;
 }
 
 .action-btn {
-  width: 100%;
+  flex: 1;
   padding: 14px;
   border: none;
   border-radius: 8px;
@@ -425,6 +435,15 @@ async function confirmDeleteChat() {
 
 .action-btn.primary:active {
   background: #06ad56;
+}
+
+.action-btn.secondary {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.action-btn.secondary:active {
+  background: #e0e0e0;
 }
 
 /* 人设选择器 Modal */

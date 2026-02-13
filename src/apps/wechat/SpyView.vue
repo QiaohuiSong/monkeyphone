@@ -1,22 +1,25 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { ArrowLeft, Eye } from 'lucide-vue-next'
+import { ArrowLeft, Eye, Users } from 'lucide-vue-next'
 import { getChatSessions, getWechatProfile } from '../../services/wechatApi.js'
 
 const props = defineProps({
   charId: { type: String, required: true }
 })
 
-const emit = defineEmits(['back', 'openChat'])
+const emit = defineEmits(['back', 'openChat', 'openGroupChat'])
 
 const sessions = ref([])
 const profile = ref(null)
 const loading = ref(true)
 
 // 会话图标映射（根据关键词匹配）
-function getSessionIcon(sessionId, sessionName) {
-  const id = sessionId.toLowerCase()
-  const name = sessionName.toLowerCase()
+function getSessionIcon(session) {
+  // 群聊使用群聊图标
+  if (session.type === 'group') return null // 使用 Users 组件
+
+  const id = session.id.toLowerCase()
+  const name = session.name.toLowerCase()
 
   if (id === 'player') return '💬'
   if (id === 'npc_team' || name.includes('团队')) return '🔧'
@@ -58,8 +61,13 @@ function goBack() {
 }
 
 function openSession(session) {
-  // 传递会话元数据，包含对方名称
-  emit('openChat', props.charId, session.id, true, { name: session.name })
+  if (session.type === 'group') {
+    // 群聊使用专门的群聊事件
+    emit('openGroupChat', session.id, true)
+  } else {
+    // 普通聊天，传递会话元数据，包含对方名称
+    emit('openChat', props.charId, session.id, true, { name: session.name })
+  }
 }
 </script>
 
@@ -98,8 +106,9 @@ function openSession(session) {
         class="session-item"
         @click="openSession(session)"
       >
-        <div class="session-icon">
-          {{ getSessionIcon(session.id, session.name) }}
+        <div class="session-icon" :class="{ 'group-icon': session.type === 'group' }">
+          <Users v-if="session.type === 'group'" :size="24" />
+          <span v-else>{{ getSessionIcon(session) }}</span>
         </div>
         <div class="session-info">
           <div class="session-name">{{ session.name }}</div>
@@ -209,6 +218,11 @@ function openSession(session) {
   align-items: center;
   justify-content: center;
   font-size: 24px;
+}
+
+.session-icon.group-icon {
+  background: #07c160;
+  color: #fff;
 }
 
 .session-info {

@@ -128,4 +128,127 @@ router.delete('/personas/:id', authMiddleware, async (req, res) => {
   }
 })
 
+// ==================== 自定义 NPC ====================
+
+// 获取自定义 NPC 文件路径
+function getCustomNpcsPath(username) {
+  return path.join('./data', username, 'custom_npcs.json')
+}
+
+// 确保自定义 NPC 文件存在
+async function ensureCustomNpcsFile(username) {
+  const npcsPath = getCustomNpcsPath(username)
+  const userDir = path.dirname(npcsPath)
+
+  await fs.ensureDir(userDir)
+
+  if (!await fs.pathExists(npcsPath)) {
+    await fs.writeJson(npcsPath, [], { spaces: 2 })
+  }
+
+  return npcsPath
+}
+
+// 获取自定义 NPC 列表
+router.get('/custom-npcs', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username
+    const npcsPath = await ensureCustomNpcsFile(username)
+    const npcs = await fs.readJson(npcsPath)
+
+    res.json({ success: true, data: npcs })
+  } catch (error) {
+    console.error('获取自定义 NPC 列表失败:', error)
+    res.status(500).json({ error: '获取自定义 NPC 列表失败' })
+  }
+})
+
+// 创建自定义 NPC
+router.post('/custom-npcs', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username
+    const { name, avatar, personality } = req.body
+
+    if (!name) {
+      return res.status(400).json({ error: 'NPC 名称不能为空' })
+    }
+
+    const npcsPath = await ensureCustomNpcsFile(username)
+    const npcs = await fs.readJson(npcsPath)
+
+    const newNpc = {
+      id: `custom_npc_${Date.now()}`,
+      name,
+      avatar: avatar || '',
+      personality: personality || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+
+    npcs.push(newNpc)
+    await fs.writeJson(npcsPath, npcs, { spaces: 2 })
+
+    res.json({ success: true, data: newNpc })
+  } catch (error) {
+    console.error('创建自定义 NPC 失败:', error)
+    res.status(500).json({ error: '创建自定义 NPC 失败' })
+  }
+})
+
+// 修改自定义 NPC
+router.put('/custom-npcs/:id', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username
+    const { id } = req.params
+    const { name, avatar, personality } = req.body
+
+    const npcsPath = await ensureCustomNpcsFile(username)
+    const npcs = await fs.readJson(npcsPath)
+
+    const index = npcs.findIndex(n => n.id === id)
+    if (index === -1) {
+      return res.status(404).json({ error: 'NPC 不存在' })
+    }
+
+    const npc = npcs[index]
+
+    if (name !== undefined) npc.name = name
+    if (avatar !== undefined) npc.avatar = avatar
+    if (personality !== undefined) npc.personality = personality
+    npc.updatedAt = new Date().toISOString()
+
+    npcs[index] = npc
+    await fs.writeJson(npcsPath, npcs, { spaces: 2 })
+
+    res.json({ success: true, data: npc })
+  } catch (error) {
+    console.error('修改自定义 NPC 失败:', error)
+    res.status(500).json({ error: '修改自定义 NPC 失败' })
+  }
+})
+
+// 删除自定义 NPC
+router.delete('/custom-npcs/:id', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username
+    const { id } = req.params
+
+    const npcsPath = await ensureCustomNpcsFile(username)
+    const npcs = await fs.readJson(npcsPath)
+
+    const index = npcs.findIndex(n => n.id === id)
+    if (index === -1) {
+      return res.status(404).json({ error: 'NPC 不存在' })
+    }
+
+    npcs.splice(index, 1)
+    await fs.writeJson(npcsPath, npcs, { spaces: 2 })
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('删除自定义 NPC 失败:', error)
+    res.status(500).json({ error: '删除自定义 NPC 失败' })
+  }
+})
+
 export default router

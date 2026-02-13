@@ -6,6 +6,7 @@ import { getAllAffections, getAffectionLevels } from './affectionApi.js'
 import { useWebSocketStore } from '../../stores/websocketStore.js'
 
 const characters = ref([])
+const myCharacters = ref([])  // 保存原始的"我的角色"列表，用于匹配
 const affections = ref({})
 const levels = ref([])
 const currentIndex = ref(0)
@@ -198,13 +199,21 @@ async function loadAffectionData() {
     const affs = await getAllAffections(currentSessionId.value)
     affections.value = affs
 
-    // 更新角色列表（只显示有好感度数据的角色）
-    const charList = [...characters.value]
-    const myCharIds = new Set(characters.value.map(c => c.id))
-
+    // 只显示有好感度数据的角色（当前人设聊过的角色）
     const affectionCharIds = Object.keys(affs)
+    const charList = []
+    const loadedIds = new Set()
+
     for (const charId of affectionCharIds) {
-      if (!myCharIds.has(charId)) {
+      if (loadedIds.has(charId)) continue
+
+      // 先从"我的角色"中找
+      const myChar = myCharacters.value.find(c => c.id === charId)
+      if (myChar) {
+        charList.push(myChar)
+        loadedIds.add(charId)
+      } else {
+        // 否则尝试加载广场角色
         try {
           const charData = await getCharacterForChat(charId)
           if (charData) {
@@ -214,7 +223,7 @@ async function loadAffectionData() {
               avatar: charData.avatar,
               isPlazaChar: true
             })
-            myCharIds.add(charId)
+            loadedIds.add(charId)
           }
         } catch (e) {
           console.warn(`广场角色 ${charId} 加载失败`)
@@ -238,7 +247,7 @@ async function loadData() {
       getAffectionLevels()
     ])
 
-    characters.value = [...myChars]
+    myCharacters.value = [...myChars]  // 保存原始的"我的角色"列表
     personas.value = personaList
     levels.value = lvls
 
@@ -282,9 +291,13 @@ onUnmounted(() => {
 
     <!-- 无角色 -->
     <div v-else-if="allCharacters.length === 0" class="empty">
+      <!-- 右上角用户切换按钮 -->
+      <button class="user-switch-btn" @click="showUserSelector = true">
+        <Users :size="18" />
+      </button>
       <Sparkles :size="64" />
-      <p>还没有创建角色</p>
-      <p class="hint">先去创建一个角色开始攻略吧~</p>
+      <p>还没有互动记录</p>
+      <p class="hint">先去和角色聊天开始攻略吧~</p>
     </div>
 
     <!-- 主界面 -->

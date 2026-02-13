@@ -3,14 +3,53 @@ import { computed } from 'vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
+  packet: { type: Object, default: null }, // 红包数据（从缓存获取）
+  currentUserId: { type: String, default: 'user' },
   isOwn: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['click'])
 
-const redpacketData = computed(() => props.message.redpacketData || {})
-const isOpened = computed(() => redpacketData.value.status === 'opened')
-const note = computed(() => redpacketData.value.note || '恭喜发财，大吉大利')
+// 红包祝福语
+const wishes = computed(() => {
+  // 优先从消息文本中提取
+  const text = props.message.text || ''
+  const match = text.match(/\[红包\]\s*(.+)/)
+  if (match) return match[1]
+  return props.packet?.wishes || '恭喜发财，大吉大利'
+})
+
+// 红包状态
+const packetStatus = computed(() => {
+  if (!props.packet) return 'unknown'
+
+  // 检查是否已被抢光
+  if (props.packet.remain_num <= 0) return 'finished'
+
+  // 检查是否过期
+  if (Date.now() > props.packet.expired_at) return 'expired'
+
+  // 检查自己是否已领取
+  const myRecord = props.packet.records?.find(r => r.user_id === props.currentUserId)
+  if (myRecord) return 'grabbed'
+
+  return 'available'
+})
+
+// 是否显示为已领取/不可领状态（半透明）
+const isInactive = computed(() => {
+  return ['finished', 'expired', 'grabbed'].includes(packetStatus.value)
+})
+
+// 状态文字
+const statusText = computed(() => {
+  switch (packetStatus.value) {
+    case 'grabbed': return '已领取'
+    case 'finished': return '已被领完'
+    case 'expired': return '已过期'
+    default: return ''
+  }
+})
 
 function handleClick() {
   emit('click', props.message)
@@ -20,7 +59,7 @@ function handleClick() {
 <template>
   <div
     class="redpacket-bubble"
-    :class="{ opened: isOpened, own: isOwn }"
+    :class="{ inactive: isInactive, own: isOwn }"
     @click="handleClick"
   >
     <!-- 顶部金边装饰 -->
@@ -31,15 +70,15 @@ function handleClick() {
       <!-- 左侧红包图标 -->
       <div class="redpacket-icon">
         <div class="icon-inner">
-          <span v-if="!isOpened" class="kai-text">開</span>
+          <span v-if="!isInactive" class="kai-text">開</span>
           <span v-else class="opened-icon">🧧</span>
         </div>
       </div>
 
       <!-- 右侧文本区域 -->
       <div class="redpacket-content">
-        <div class="redpacket-note">{{ note }}</div>
-        <div v-if="isOpened" class="redpacket-status">已领取</div>
+        <div class="redpacket-note">{{ wishes }}</div>
+        <div v-if="statusText" class="redpacket-status">{{ statusText }}</div>
       </div>
     </div>
 
@@ -53,51 +92,45 @@ function handleClick() {
 
 <style scoped>
 .redpacket-bubble {
-  width: 200px;
+  width: 240px;
   max-width: 100%;
-  background: linear-gradient(180deg, #fa6b5b 0%, #e84e3d 50%, #d63e2f 100%);
+  background: linear-gradient(180deg, #fa9d3b 0%, #e76d3b 50%, #cf5735 100%);
   border-radius: 6px;
   overflow: hidden;
   cursor: pointer;
   user-select: none;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   position: relative;
-}
-
-.redpacket-bubble:hover {
-  filter: brightness(1.05);
-  transform: translateY(-1px);
 }
 
 .redpacket-bubble:active {
   transform: scale(0.98);
 }
 
-/* 已领取状态 - 颜色变浅 */
-.redpacket-bubble.opened {
-  background: linear-gradient(180deg, #e8c9b0 0%, #d4b499 50%, #c4a388 100%);
+/* 已领取/不可领状态 - 颜色变浅 */
+.redpacket-bubble.inactive {
+  background: linear-gradient(180deg, #e8d5c0 0%, #d4bda5 50%, #c4a88a 100%);
   cursor: default;
 }
 
-.redpacket-bubble.opened:hover {
-  filter: none;
+.redpacket-bubble.inactive:active {
   transform: none;
 }
 
 /* 顶部金边 */
 .gold-border {
-  height: 4px;
-  background: linear-gradient(90deg, #ffd700, #ffb700, #ffd700);
+  height: 3px;
+  background: linear-gradient(90deg, #ffeaa7, #fdcb6e, #ffeaa7);
 }
 
-.redpacket-bubble.opened .gold-border {
-  background: linear-gradient(90deg, #d4b499, #c4a388, #d4b499);
+.redpacket-bubble.inactive .gold-border {
+  background: linear-gradient(90deg, #d4bda5, #c4a88a, #d4bda5);
 }
 
 .redpacket-main {
   display: flex;
-  align-items: center;
-  padding: 14px 12px;
+  align-items: flex-start;
+  padding: 12px;
   gap: 10px;
 }
 
@@ -110,67 +143,66 @@ function handleClick() {
 .icon-inner {
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, #ffd700 0%, #ffb700 100%);
+  background: linear-gradient(135deg, #ffeaa7 0%, #fdcb6e 100%);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
-.redpacket-bubble.opened .icon-inner {
-  background: rgba(255, 255, 255, 0.3);
+.redpacket-bubble.inactive .icon-inner {
+  background: rgba(255, 255, 255, 0.4);
   box-shadow: none;
 }
 
 .kai-text {
   font-size: 18px;
   font-weight: bold;
-  color: #d63e2f;
-  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.3);
+  color: #cf5735;
 }
 
 .opened-icon {
-  font-size: 20px;
+  font-size: 18px;
+  opacity: 0.7;
 }
 
 .redpacket-content {
   flex: 1;
   min-width: 0;
+  padding-top: 2px;
 }
 
 .redpacket-note {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   color: #fff;
   line-height: 1.4;
   word-break: break-word;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
 }
 
-.redpacket-bubble.opened .redpacket-note {
-  color: rgba(100, 70, 50, 0.9);
-  text-shadow: none;
+.redpacket-bubble.inactive .redpacket-note {
+  color: rgba(90, 60, 40, 0.9);
 }
 
 .redpacket-status {
   font-size: 12px;
-  color: rgba(100, 70, 50, 0.7);
-  margin-top: 2px;
+  color: rgba(90, 60, 40, 0.7);
+  margin-top: 4px;
 }
 
 .redpacket-footer {
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.redpacket-bubble.opened .redpacket-footer {
+.redpacket-bubble.inactive .redpacket-footer {
   border-top-color: rgba(0, 0, 0, 0.05);
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .wechat-icon {
@@ -181,7 +213,7 @@ function handleClick() {
   background-repeat: no-repeat;
 }
 
-.redpacket-bubble.opened .wechat-icon {
+.redpacket-bubble.inactive .wechat-icon {
   opacity: 0.5;
 }
 
@@ -190,7 +222,7 @@ function handleClick() {
   color: rgba(255, 255, 255, 0.7);
 }
 
-.redpacket-bubble.opened .redpacket-footer span:last-child {
-  color: rgba(100, 70, 50, 0.6);
+.redpacket-bubble.inactive .redpacket-footer span:last-child {
+  color: rgba(90, 60, 40, 0.5);
 }
 </style>

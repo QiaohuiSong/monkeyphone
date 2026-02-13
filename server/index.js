@@ -18,6 +18,7 @@ import userRouter from './routes/user.js'
 import gamesRouter from './routes/games.js'
 import healthRouter from './routes/health.js'
 import bankRouter from './routes/bank.js'
+import groupsRouter from './routes/groups.js'
 
 // 导入健康状态计算函数
 async function getHealthContextForUser(userId) {
@@ -66,7 +67,7 @@ async function getHealthContextForUser(userId) {
 }
 
 const app = express()
-const PORT = process.env.PORT || 5173
+const PORT = process.env.PORT || 3000
 const NEWAPI_BASE_URL = 'https://monkeyapi.apimonkey.online'
 
 // 创建 HTTP 服务器（用于 WebSocket）
@@ -164,6 +165,9 @@ app.use('/api/health', healthRouter)
 
 // 银行系统路由
 app.use('/api/bank', bankRouter)
+
+// 群聊路由
+app.use('/api/groups', groupsRouter)
 
 // ==================== 玩家朋友圈 API ====================
 
@@ -1140,9 +1144,36 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
   try {
     if (await fs.pathExists(wechatProfilePath)) {
       wechatProfile = await fs.readJson(wechatProfilePath)
+    } else {
+      // 首次聊天，创建默认 profile
+      wechatProfile = {
+        wxId: '',
+        nickname: character.name,
+        avatar: character.avatar || '',
+        signature: '',
+        coverImage: '',
+        chatBackground: '',
+        boundPersonaId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+      await fs.ensureDir(wechatDir)
+      await fs.writeJson(wechatProfilePath, wechatProfile, { spaces: 2 })
     }
   } catch (e) {
     console.error('读取微信profile失败:', e)
+    // 即使出错也创建默认 profile
+    wechatProfile = {
+      wxId: '',
+      nickname: character.name,
+      avatar: character.avatar || '',
+      signature: '',
+      coverImage: '',
+      chatBackground: '',
+      boundPersonaId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
   }
 
   // 获取现有的偷看会话列表
@@ -1180,10 +1211,13 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     const playerMomentsPath = path.join('./data', req.user.username, 'player_moments.json')
     if (await fs.pathExists(playerMomentsPath)) {
       const playerMomentsData = await fs.readJson(playerMomentsPath)
+      // 获取角色绑定的人设ID（如果没有绑定，使用 'default'）
+      const charBoundPersonaId = wechatProfile?.boundPersonaId || 'default'
       // 筛选出与当前人设相关且未同步给该角色的朋友圈
       unsyncedPlayerMoments = playerMomentsData.filter(m => {
-        // 如果绑定了人设，只同步该人设发的朋友圈
-        if (boundPersona && m.personaId && m.personaId !== boundPersona.id) {
+        // 只同步与角色绑定人设匹配的朋友圈
+        const momentPersonaId = m.personaId || 'default'
+        if (momentPersonaId !== charBoundPersonaId) {
           return false
         }
         // 检查是否已同步给该角色
@@ -1291,22 +1325,24 @@ ${needWxId ? 'Generate a realistic WeChat ID: 6-20 chars, start with letter, onl
 ${needSignature ? 'Create a personal signature reflecting your mood/personality (max 30 chars).' : 'You may update signature based on mood, or set to null to keep unchanged.'}
 
 [SPY CHAT GENERATION TASK]
-Based on the current conversation context and your character, decide if you have other chat conversations on your phone that could be discovered.
+You can generate chat conversations with your NPC contacts (关系组成员) that could be discovered on your phone.
+${character.npcs && character.npcs.length > 0 ? `
+Your NPC contacts (ONLY generate chats with these people):
+${character.npcs.map(npc => `- ID: "${npc.id}", Name: "${npc.name}", Relation: "${npc.relation || '未知'}"${npc.bio ? `, Bio: "${npc.bio}"` : ''}`).join('\n')}
+
 Existing spy sessions: ${existingSessions.length > 0 ? existingSessions.join(', ') : 'none'}
 
-Consider generating spy chats if:
-- The conversation hints at relationships (ex, crush, friends, family)
-- Your character background suggests other social connections
-- It would add depth to your character's story
-
 If you decide to generate spy chats:
-- Create realistic WeChat conversations with other people
+- ONLY use sessionId from the NPC IDs listed above (e.g., "${character.npcs[0]?.id || 'npc_id'}")
 - Each session should have 2-8 messages
-- Messages should feel natural and reveal character depth
-- Use sessionId like: ex_girlfriend, best_friend, mom, crush, coworker_zhang, etc.
+- Messages should feel natural and match the NPC's relationship with you
+- sender: "character" = message from you, sender: "npc" = message from NPC
 - Set spyChats to null if no new chats should be generated this time
 
 IMPORTANT: Only generate spy chats occasionally when contextually appropriate, not every message.
+` : `
+You have no NPC contacts defined, so set spyChats to null.
+`}
 
 [MOMENTS (朋友圈) GENERATION TASK]
 Based on the current conversation and your emotional state, decide if you want to post to your Moments (朋友圈).

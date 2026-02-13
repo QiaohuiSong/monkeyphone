@@ -206,7 +206,7 @@ function formatDate(isoString) {
         <label class="section-label">选择角色</label>
         <select v-model="selectedCharId" class="select-input" :disabled="loading">
           <option v-for="char in characters" :key="char.id" :value="char.id">
-            {{ char.name }}{{ char.isPlazaChar ? ' (广场)' : '' }}
+            {{ char.name }}
           </option>
         </select>
       </div>

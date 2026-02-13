@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { MessageCircle, Users, Compass, User } from 'lucide-vue-next'
-import { getMyCharacters, getPlazaCharacters, getCharacterForChat } from '../../services/api.js'
+import { MessageCircle, Users, Compass, User, Plus } from 'lucide-vue-next'
+import { getMyCharacters, getPlazaCharacters, getCharacterForChat, getGroups, createGroup, getPersonas } from '../../services/api.js'
 import { useChatStore } from '../../stores/chatStore.js'
 
 import ChatWindow from './ChatWindow.vue'
@@ -11,12 +11,16 @@ import SpyView from './SpyView.vue'
 import MomentsView from './MomentsView.vue'
 import MomentsFeed from './MomentsFeed.vue'
 import PersonaManager from './PersonaManager.vue'
+import GroupChatWindow from './GroupChatWindow.vue'
+import GroupInfo from './GroupInfo.vue'
+import MemberSelector from './MemberSelector.vue'
+import RedPacketDetail from './RedPacketDetail.vue'
 
 const route = useRoute()
 const chatStore = useChatStore()
 
 // 当前视图状态
-const currentView = ref('chats') // chats, contacts, discover, me, chat, profile, spy, moments, momentsFeed, personas
+const currentView = ref('chats') // chats, contacts, discover, me, chat, profile, spy, moments, momentsFeed, personas, groupChat, groupInfo, memberSelector, redPacketDetail
 const currentTab = ref('chats')
 
 // 角色相关
@@ -27,7 +31,17 @@ const selectedSessionId = ref('player')
 const isReadOnly = ref(false)
 const sessionMeta = ref(null) // 会话元数据（用于spy模式显示对方名称）
 
-// 合并的聊天列表（我的角色 + 聊过的广场角色）
+// 群聊相关
+const groups = ref([])
+const selectedGroupId = ref(null)
+const selectedRedPacketId = ref(null)
+const pendingGroupCharId = ref(null) // 待创建群聊的角色ID
+
+// 用户人设
+const currentPersona = ref(null)
+const personas = ref([])
+
+// 合并的聊天列表（我的角色 + 聊过的广场角色 + 群聊）
 const allChatCharacters = computed(() => {
   const myIds = new Set(characters.value.map(c => c.id))
   // 过滤掉已存在于我的角色中的广场角色
@@ -53,6 +67,8 @@ const totalUnread = computed(() => chatStore.getTotalUnread())
 
 onMounted(async () => {
   await loadCharacters()
+  await loadGroups()
+  await loadPersonas()
 
   // 如果 URL 带有 charId，直接进入聊天
   if (route.query.charId) {
@@ -120,6 +136,29 @@ async function loadCharacters() {
     await loadChattedPlazaCharacters()
   } catch (e) {
     console.error('加载角色列表失败:', e)
+  }
+}
+
+// 加载群列表
+async function loadGroups() {
+  try {
+    groups.value = await getGroups()
+  } catch (e) {
+    console.error('加载群列表失败:', e)
+  }
+}
+
+// 加载人设列表
+async function loadPersonas() {
+  try {
+    personas.value = await getPersonas()
+    // 加载上次选择的人设
+    const savedPersonaId = localStorage.getItem('current_persona_id')
+    if (savedPersonaId) {
+      currentPersona.value = personas.value.find(p => p.id === savedPersonaId) || null
+    }
+  } catch (e) {
+    console.error('加载人设列表失败:', e)
   }
 }
 
@@ -235,6 +274,93 @@ function openPersonaManager() {
   currentView.value = 'personas'
 }
 
+// 打开群聊
+function openGroupChat(groupId) {
+  selectedGroupId.value = groupId
+  currentView.value = 'groupChat'
+}
+
+// 打开偷看模式的群聊（只读）
+function openSpyGroupChat(groupId, readOnly = true) {
+  selectedGroupId.value = groupId
+  // TODO: 群聊偷看模式需要 GroupChatWindow 支持只读
+  currentView.value = 'groupChat'
+}
+
+// 打开群信息
+function openGroupInfo(groupId) {
+  selectedGroupId.value = groupId
+  currentView.value = 'groupInfo'
+}
+
+// 打开成员选择器（创建群聊）
+function openMemberSelector(charId) {
+  pendingGroupCharId.value = charId
+  currentView.value = 'memberSelector'
+}
+
+// 处理成员选择完成（创建群聊）
+async function handleMembersSelected(selectedMembers) {
+  if (!pendingGroupCharId.value || selectedMembers.length === 0) {
+    currentView.value = 'contacts'
+    return
+  }
+
+  try {
+    // 获取主角色信息
+    const mainChar = characters.value.find(c => c.id === pendingGroupCharId.value)
+    if (!mainChar) {
+      currentView.value = 'contacts'
+      return
+    }
+
+    // 构建成员列表
+    const members = [
+      {
+        id: mainChar.id,
+        name: mainChar.name,
+        avatar: mainChar.avatar,
+        type: 'main',
+        persona: mainChar.persona
+      },
+      ...selectedMembers.map(m => ({
+        id: m.id,
+        name: m.name,
+        avatar: m.avatar,
+        type: m.type // 'preset' or 'custom'
+      }))
+    ]
+
+    // 创建群名：角色名的群聊（人数）
+    const groupName = `${mainChar.name}的群聊（${members.length}）`
+
+    // 创建群
+    const group = await createGroup({
+      name: groupName,
+      members,
+      owner_char_id: mainChar.id,
+      persona_id: currentPersona.value?.id || null
+    })
+
+    groups.value.unshift(group)
+
+    // 进入群聊
+    selectedGroupId.value = group.id
+    currentView.value = 'groupChat'
+  } catch (e) {
+    console.error('创建群聊失败:', e)
+    alert('创建群聊失败: ' + e.message)
+    currentView.value = 'contacts'
+  }
+}
+
+// 打开红包详情
+function openRedPacketDetail(groupId, packetId) {
+  selectedGroupId.value = groupId
+  selectedRedPacketId.value = packetId
+  currentView.value = 'redPacketDetail'
+}
+
 // 返回
 async function goBack() {
   if (currentView.value === 'chat') {
@@ -254,8 +380,75 @@ async function goBack() {
     currentView.value = 'discover'
   } else if (currentView.value === 'personas') {
     currentView.value = 'me'
+  } else if (currentView.value === 'groupChat') {
+    currentView.value = 'chats'
+    await loadGroups()
+  } else if (currentView.value === 'groupInfo') {
+    currentView.value = 'groupChat'
+  } else if (currentView.value === 'memberSelector') {
+    currentView.value = 'contacts'
+  } else if (currentView.value === 'redPacketDetail') {
+    currentView.value = 'groupChat'
   } else {
     currentView.value = currentTab.value
+  }
+}
+
+// 群被删除后的处理
+function handleGroupDeleted() {
+  loadGroups()
+  currentView.value = 'chats'
+}
+
+// 添加成员到现有群（从群信息页触发）
+function handleAddMemberToGroup(groupId) {
+  // 找到群的主角色
+  const group = groups.value.find(g => g.id === groupId)
+  if (group) {
+    pendingGroupCharId.value = group.owner_char_id
+    selectedGroupId.value = groupId
+    currentView.value = 'addMemberToGroup'
+  }
+}
+
+// 处理添加成员到现有群
+async function handleAddMembersToExistingGroup(selectedMembers) {
+  if (!selectedGroupId.value || selectedMembers.length === 0) {
+    currentView.value = 'groupInfo'
+    return
+  }
+
+  try {
+    const group = groups.value.find(g => g.id === selectedGroupId.value)
+    if (!group) {
+      currentView.value = 'groupInfo'
+      return
+    }
+
+    // 合并成员
+    const newMembers = [
+      ...group.members,
+      ...selectedMembers.map(m => ({
+        id: m.id,
+        name: m.name,
+        avatar: m.avatar,
+        type: m.type
+      }))
+    ]
+
+    // 更新群
+    const { updateGroup } = await import('../../services/api.js')
+    await updateGroup(selectedGroupId.value, { members: newMembers })
+
+    // 刷新群列表
+    await loadGroups()
+
+    // 返回群信息页
+    currentView.value = 'groupInfo'
+  } catch (e) {
+    console.error('添加成员失败:', e)
+    alert('添加成员失败: ' + e.message)
+    currentView.value = 'groupInfo'
   }
 }
 
@@ -290,6 +483,7 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
       @openChat="openChat"
       @openMoments="openMoments"
       @openSpy="openSpy"
+      @createGroupChat="openMemberSelector"
     />
 
     <!-- 偷看模式 -->
@@ -298,6 +492,7 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
       :charId="selectedCharId"
       @back="goBack"
       @openChat="openChat"
+      @openGroupChat="openSpyGroupChat"
     />
 
     <!-- 单个角色的朋友圈（个人相册） -->
@@ -320,6 +515,50 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
       @back="goBack"
     />
 
+    <!-- 群聊窗口 -->
+    <GroupChatWindow
+      v-else-if="currentView === 'groupChat'"
+      :groupId="selectedGroupId"
+      @back="goBack"
+      @openGroupInfo="openGroupInfo"
+      @openRedPacketDetail="openRedPacketDetail"
+    />
+
+    <!-- 群信息 -->
+    <GroupInfo
+      v-else-if="currentView === 'groupInfo'"
+      :groupId="selectedGroupId"
+      @back="goBack"
+      @deleted="handleGroupDeleted"
+      @addMember="handleAddMemberToGroup"
+    />
+
+    <!-- 成员选择器（创建新群聊） -->
+    <MemberSelector
+      v-else-if="currentView === 'memberSelector'"
+      :existingMemberIds="[]"
+      :ownerCharId="pendingGroupCharId"
+      @close="goBack"
+      @select="handleMembersSelected"
+    />
+
+    <!-- 成员选择器（添加成员到现有群） -->
+    <MemberSelector
+      v-else-if="currentView === 'addMemberToGroup'"
+      :existingMemberIds="groups.find(g => g.id === selectedGroupId)?.members?.map(m => m.id) || []"
+      :ownerCharId="pendingGroupCharId"
+      @close="() => currentView = 'groupInfo'"
+      @select="handleAddMembersToExistingGroup"
+    />
+
+    <!-- 红包详情 -->
+    <RedPacketDetail
+      v-else-if="currentView === 'redPacketDetail'"
+      :groupId="selectedGroupId"
+      :packetId="selectedRedPacketId"
+      @back="goBack"
+    />
+
     <!-- 主界面 -->
     <template v-else>
       <div class="main-content">
@@ -330,10 +569,27 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
           </div>
 
           <div class="chat-list">
-            <div v-if="allChatCharacters.length === 0" class="empty-tip">
+            <div v-if="allChatCharacters.length === 0 && groups.length === 0" class="empty-tip">
               暂无聊天，去通讯录添加角色吧
             </div>
 
+            <!-- 群聊列表 -->
+            <div
+              v-for="group in groups"
+              :key="group.id"
+              class="chat-item"
+              @click="openGroupChat(group.id)"
+            >
+              <div class="chat-avatar group-avatar">
+                <Users :size="24" />
+              </div>
+              <div class="chat-info">
+                <div class="chat-name">{{ group.name }}</div>
+                <div class="chat-preview">[群聊] {{ group.members?.length || 0 }} 人</div>
+              </div>
+            </div>
+
+            <!-- 角色聊天列表 -->
             <div
               v-for="char in allChatCharacters"
               :key="char.id"
@@ -370,12 +626,12 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
           </div>
 
           <div class="contact-list">
-            <div v-if="characters.length === 0" class="empty-tip">
+            <div v-if="allChatCharacters.length === 0" class="empty-tip">
               暂无联系人
             </div>
 
             <div
-              v-for="char in characters"
+              v-for="char in allChatCharacters"
               :key="char.id"
               class="contact-item"
               @click="openProfile(char.id)"
@@ -385,6 +641,9 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
                 <span v-else>{{ char.name?.[0] || '?' }}</span>
               </div>
               <div class="contact-name">{{ char.name }}</div>
+              <button class="create-group-btn" @click.stop="openMemberSelector(char.id)" title="发起群聊">
+                <Plus :size="18" />
+              </button>
             </div>
           </div>
         </div>
@@ -543,6 +802,12 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
   color: #fff;
 }
 
+/* 群聊头像 */
+.chat-avatar.group-avatar {
+  background: #07c160;
+  color: #fff;
+}
+
 /* 未读红点徽标 */
 .unread-badge {
   position: absolute;
@@ -637,6 +902,26 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
 .contact-name {
   font-size: 16px;
   color: #000;
+  flex: 1;
+}
+
+/* 发起群聊按钮 */
+.create-group-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: #f0f0f0;
+  color: #07c160;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.create-group-btn:active {
+  background: #e0e0e0;
 }
 
 /* 发现 */

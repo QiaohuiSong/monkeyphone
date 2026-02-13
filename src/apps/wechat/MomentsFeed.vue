@@ -6,7 +6,6 @@ import { getMyCharacters, getCharacterForChat, getPersonas } from '../../service
 
 const emit = defineEmits(['back', 'openProfile'])
 
-const allMoments = ref([])
 const characters = ref([])
 const profiles = ref({})
 const loading = ref(true)
@@ -105,10 +104,60 @@ async function loadPlayerMomentsData() {
   )
 }
 
-// 监听人设切换
+// 监听人设切换，重新加载数据
 watch(selectedPersonaId, async () => {
   await loadPlayerMomentsData()
+  await loadCharacterMoments()
 })
+
+// 角色朋友圈（按人设隔离）
+const charMoments = ref([])
+
+// 加载与当前人设绑定的角色的朋友圈
+async function loadCharacterMoments() {
+  const personaId = selectedPersonaId.value || 'default'
+  const moments = []
+
+  for (const char of characters.value) {
+    try {
+      const [profile, charData, charMomentsData] = await Promise.all([
+        getWechatProfile(char.id),
+        getCharacterForChat(char.id).catch(() => null),
+        getMoments(char.id)
+      ])
+
+      // 保存 profile 信息
+      profiles.value[char.id] = {
+        ...profile,
+        name: profile?.nickname || charData?.name || char.name,
+        avatar: profile?.avatar || charData?.avatar || char.avatar,
+        boundPersonaId: profile?.boundPersonaId
+      }
+
+      // 只加载与当前人设绑定的角色的朋友圈
+      // 如果角色没有绑定人设，默认属于 'default' 人设
+      const charBoundPersonaId = profile?.boundPersonaId || 'default'
+      if (charBoundPersonaId !== personaId) {
+        continue // 跳过不属于当前人设的角色
+      }
+
+      // 给每条动态添加角色信息
+      for (const m of charMomentsData) {
+        moments.push({
+          ...m,
+          charId: char.id,
+          authorName: profiles.value[char.id].name,
+          authorAvatar: profiles.value[char.id].avatar,
+          isPlayer: false
+        })
+      }
+    } catch (e) {
+      console.error(`加载角色 ${char.id} 朋友圈失败:`, e)
+    }
+  }
+
+  charMoments.value = moments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+}
 
 async function loadData() {
   loading.value = true
@@ -124,47 +173,19 @@ async function loadData() {
     // 加载人设资料
     loadPersonaProfiles()
 
-    // 如果有人设，默认选择第一个
-    if (personasData.length > 0 && !selectedPersonaId.value) {
+    // 恢复上次选择的人设
+    const savedPersonaId = localStorage.getItem('current_persona_id')
+    if (savedPersonaId && personasData.find(p => p.id === savedPersonaId)) {
+      selectedPersonaId.value = savedPersonaId
+    } else if (personasData.length > 0 && !selectedPersonaId.value) {
       selectedPersonaId.value = personasData[0].id
     }
 
     // 加载当前人设的朋友圈
     await loadPlayerMomentsData()
 
-    // 获取每个角色的资料和朋友圈
-    const momentsPromises = chars.map(async (char) => {
-      try {
-        const [profile, charData, moments] = await Promise.all([
-          getWechatProfile(char.id),
-          getCharacterForChat(char.id).catch(() => null),
-          getMoments(char.id)
-        ])
-
-        profiles.value[char.id] = {
-          ...profile,
-          name: profile?.nickname || charData?.name || char.name,
-          avatar: profile?.avatar || charData?.avatar || char.avatar
-        }
-
-        // 给每条动态添加角色信息
-        return moments.map(m => ({
-          ...m,
-          charId: char.id,
-          authorName: profiles.value[char.id].name,
-          authorAvatar: profiles.value[char.id].avatar,
-          isPlayer: false
-        }))
-      } catch (e) {
-        console.error(`加载角色 ${char.id} 朋友圈失败:`, e)
-        return []
-      }
-    })
-
-    const allMomentsArrays = await Promise.all(momentsPromises)
-    allMoments.value = allMomentsArrays
-      .flat()
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    // 加载与当前人设绑定的角色的朋友圈
+    await loadCharacterMoments()
 
   } catch (e) {
     console.error('加载朋友圈失败:', e)
@@ -183,7 +204,8 @@ const combinedMoments = computed(() => {
     personaId: selectedPersonaId.value
   }))
 
-  return [...playerMomentsWithInfo, ...allMoments.value]
+  // 使用 charMoments 而不是 allMoments
+  return [...playerMomentsWithInfo, ...charMoments.value]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 })
 
