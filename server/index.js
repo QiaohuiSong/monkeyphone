@@ -85,6 +85,68 @@ function sanitizeAIResponse(text) {
   return cleaned
 }
 
+// ==================== AI JSON 响应解析函数 ====================
+// 强健地解析 AI 返回的 JSON，处理 Markdown 代码块等情况
+function parseAIResponse(rawText) {
+  if (!rawText || typeof rawText !== 'string') {
+    return { text: rawText || '', isStructured: false }
+  }
+
+  let cleanText = rawText.trim()
+  let parsedData = null
+
+  // 1. 尝试移除 Markdown 代码块标记 (```json ... ``` 或 ``` ... ```)
+  const jsonCodeBlockMatch = cleanText.match(/```json\s*([\s\S]*?)\s*```/i)
+  const plainCodeBlockMatch = cleanText.match(/```\s*([\s\S]*?)\s*```/)
+
+  if (jsonCodeBlockMatch) {
+    cleanText = jsonCodeBlockMatch[1].trim()
+  } else if (plainCodeBlockMatch) {
+    // 检查代码块内容是否像 JSON
+    const blockContent = plainCodeBlockMatch[1].trim()
+    if (blockContent.startsWith('{') || blockContent.startsWith('[')) {
+      cleanText = blockContent
+    }
+  }
+
+  // 2. 尝试寻找最外层的 JSON 对象
+  const objectMatch = cleanText.match(/\{[\s\S]*\}/)
+  if (objectMatch) {
+    try {
+      parsedData = JSON.parse(objectMatch[0])
+    } catch (e) {
+      // JSON 解析失败，尝试修复常见问题
+      let fixedJson = objectMatch[0]
+      // 修复尾随逗号
+      fixedJson = fixedJson.replace(/,\s*([\]}])/g, '$1')
+      // 修复单引号
+      fixedJson = fixedJson.replace(/'/g, '"')
+      try {
+        parsedData = JSON.parse(fixedJson)
+      } catch (e2) {
+        console.error('JSON Parse Failed after fix attempt:', e2.message)
+      }
+    }
+  }
+
+  // 3. 归一化返回
+  if (parsedData) {
+    return {
+      text: parsedData.reply || parsedData.text || '',
+      profile: parsedData.profile || null,
+      redpackets: parsedData.redpackets || null,
+      spyChats: parsedData.spyChats || null,
+      moment: parsedData.moment || null,
+      affection: parsedData.affection || null,
+      rawParsed: parsedData,
+      isStructured: true
+    }
+  } else {
+    // 如果解析失败，说明 AI 回复的是纯文本
+    return { text: rawText, isStructured: false }
+  }
+}
+
 // 导入健康状态计算函数
 async function getHealthContextForUser(userId) {
   try {
@@ -1624,27 +1686,29 @@ ${jsonTaskPrompt}`
     // 防止模型泄露思考过程，破坏角色扮演沉浸感
     reply = sanitizeAIResponse(reply)
 
-    // 解析 JSON 响应
-    try {
-      // 尝试提取 JSON
-      const jsonMatch = reply.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0])
-        reply = parsed.reply || reply
+    // ========== 使用强健的 JSON 解析函数 ==========
+    const parsed = parseAIResponse(reply)
 
-        // 更新 profile
-        if (parsed.profile && wechatProfile) {
-          let updated = false
-          if (parsed.profile.wxId && needWxId) {
-            const wxIdRegex = /^[a-zA-Z][a-zA-Z0-9_]{5,19}$/
-            if (wxIdRegex.test(parsed.profile.wxId)) {
-              wechatProfile.wxId = parsed.profile.wxId
-              updated = true
-            }
-          }
-          if (parsed.profile.signature !== undefined && parsed.profile.signature !== null) {
-            wechatProfile.signature = parsed.profile.signature.slice(0, 30)
+    // 如果成功解析出结构化数据，使用解析后的文本作为回复
+    if (parsed.isStructured && parsed.text) {
+      reply = parsed.text
+    }
+
+    // 处理解析出的副作用数据
+    try {
+      // 更新 profile
+      if (parsed.profile && wechatProfile) {
+        let updated = false
+        if (parsed.profile.wxId && needWxId) {
+          const wxIdRegex = /^[a-zA-Z][a-zA-Z0-9_]{5,19}$/
+          if (wxIdRegex.test(parsed.profile.wxId)) {
+            wechatProfile.wxId = parsed.profile.wxId
             updated = true
+          }
+        }
+        if (parsed.profile.signature !== undefined && parsed.profile.signature !== null) {
+          wechatProfile.signature = parsed.profile.signature.slice(0, 30)
+          updated = true
           }
           if (updated) {
             wechatProfile.updatedAt = new Date().toISOString()
@@ -1724,13 +1788,14 @@ ${jsonTaskPrompt}`
         }
 
         // 处理角色对用户朋友圈的互动
-        if (parsed.momentInteractions && Array.isArray(parsed.momentInteractions) && unsyncedPlayerMoments.length > 0) {
+        const rawParsed = parsed.rawParsed || {}
+        if (rawParsed.momentInteractions && Array.isArray(rawParsed.momentInteractions) && unsyncedPlayerMoments.length > 0) {
           try {
             const playerMomentsPath = path.join('./data', req.user.username, 'player_moments.json')
             let playerMomentsData = await fs.readJson(playerMomentsPath)
             let hasChanges = false
 
-            for (const interaction of parsed.momentInteractions) {
+            for (const interaction of rawParsed.momentInteractions) {
               if (!interaction.momentId) continue
 
               const momentIndex = playerMomentsData.findIndex(m => m.id === interaction.momentId)
@@ -1845,9 +1910,8 @@ ${jsonTaskPrompt}`
             })
           }
         }
-      }
     } catch (parseErr) {
-      console.error('解析AI响应JSON失败:', parseErr)
+      console.error('处理AI响应副作用失败:', parseErr)
     }
 
     const aiMessage = addCharacterChat(req.user.username, charId, {
