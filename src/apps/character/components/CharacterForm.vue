@@ -2,6 +2,7 @@
 import { ref, onMounted, watch, nextTick } from 'vue'
 import { X, Upload, Trash2, Plus, Check } from 'lucide-vue-next'
 import { createCharacter, updateCharacter } from '../../../services/api.js'
+import { compressAvatar, compressPortrait } from '../../../utils/imageCompress.js'
 
 const props = defineProps({
   character: {
@@ -105,18 +106,19 @@ function triggerNpcAvatarUpload(index) {
   if (input) input.click()
 }
 
-function handleImageUpload(event, field) {
+async function handleImageUpload(event, field) {
   const file = event.target.files[0]
   if (!file) return
 
   const reader = new FileReader()
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     if (field === 'avatar') {
       // 头像需要裁剪
       openCropper(e.target.result, 'avatar')
     } else {
-      // 立绘直接使用
-      form.value[field] = e.target.result
+      // 立绘压缩后使用
+      const compressed = await compressPortrait(e.target.result)
+      form.value[field] = compressed
     }
   }
   reader.readAsDataURL(file)
@@ -254,7 +256,7 @@ function confirmCrop() {
   const ctx = canvas.getContext('2d')
   const img = new Image()
 
-  img.onload = () => {
+  img.onload = async () => {
     ctx.drawImage(
       img,
       cropX, cropY, cropSize, cropSize,
@@ -262,14 +264,16 @@ function confirmCrop() {
     )
 
     const croppedData = canvas.toDataURL('image/png')
+    // 压缩头像
+    const compressedData = await compressAvatar(croppedData)
 
     // 应用到对应目标
     if (cropperTarget.value === 'avatar') {
-      form.value.avatar = croppedData
+      form.value.avatar = compressedData
     } else if (cropperTarget.value?.type === 'npc') {
       const index = cropperTarget.value.index
       if (form.value.npcs[index]) {
-        form.value.npcs[index].avatar = croppedData
+        form.value.npcs[index].avatar = compressedData
       }
     }
 

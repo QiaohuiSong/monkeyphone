@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Plus, Edit2, Trash2, Download, Upload, MessageCircle } from 'lucide-vue-next'
 import { getMyCharacters, deleteCharacter, importCharacterJson } from '../../../services/api.js'
+import { compressAvatar, compressPortrait } from '../../../utils/imageCompress.js'
 import CharacterCard from './CharacterCard.vue'
 
 const router = useRouter()
@@ -277,6 +278,23 @@ async function handleImport(event) {
       // 导入 JSON
       const text = await file.text()
       const data = JSON.parse(text)
+
+      // 压缩图片
+      if (data.avatar) {
+        data.avatar = await compressAvatar(data.avatar)
+      }
+      if (data.portrait) {
+        data.portrait = await compressPortrait(data.portrait)
+      }
+      // 压缩 NPC 头像
+      if (data.npcs && Array.isArray(data.npcs)) {
+        for (const npc of data.npcs) {
+          if (npc.avatar) {
+            npc.avatar = await compressAvatar(npc.avatar)
+          }
+        }
+      }
+
       await importCharacterJson(data)
       await loadCharacters()
       alert('导入成功')
@@ -285,9 +303,23 @@ async function handleImport(event) {
       const arrayBuffer = await file.arrayBuffer()
       const charData = await extractPngMetadata(arrayBuffer)
       if (charData) {
-        // 使用 PNG 本身作为头像
+        // 使用 PNG 本身作为头像，并压缩
         const base64 = await fileToBase64(file)
-        charData.avatar = base64
+        charData.avatar = await compressAvatar(base64)
+
+        // 压缩立绘
+        if (charData.portrait) {
+          charData.portrait = await compressPortrait(charData.portrait)
+        }
+        // 压缩 NPC 头像
+        if (charData.npcs && Array.isArray(charData.npcs)) {
+          for (const npc of charData.npcs) {
+            if (npc.avatar) {
+              npc.avatar = await compressAvatar(npc.avatar)
+            }
+          }
+        }
+
         await importCharacterJson(charData)
         await loadCharacters()
         alert('导入成功')
