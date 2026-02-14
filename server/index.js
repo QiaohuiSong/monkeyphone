@@ -1274,6 +1274,9 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     return res.status(404).json({ error: '角色不存在' })
   }
 
+  // 调试日志：检查角色数据是否包含 greeting
+  console.log(`[AI Chat] 角色: ${character.name}, greeting存在: ${!!character.greeting}, greeting长度: ${character.greeting?.length || 0}`)
+
   const settings = getSettings(req.user.username)
   const model = settings.ai_model || 'gpt-3.5-turbo'
 
@@ -1384,12 +1387,29 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     }))
 
   // 构建 profile 更新提示
-  const needWxId = !wechatProfile?.wxId || wechatProfile.wxId.startsWith('wxid_')
-  const needSignature = !wechatProfile?.signature || wechatProfile.signature === ''
+  // 检测微信号是否是初始状态（空或以 wxid_ 开头的系统生成值）
+  const needWxId = !wechatProfile?.wxId || wechatProfile.wxId === '' || wechatProfile.wxId.startsWith('wxid_')
+  // 检测个性签名是否是初始状态（空）
+  const needSignature = !wechatProfile?.signature || wechatProfile.signature === '' || wechatProfile.signature.trim() === ''
+
+  // 构建更强调的 profile 提示
+  let profilePrompt = ''
+  if (needWxId || needSignature) {
+    profilePrompt = `
+[**MANDATORY PROFILE UPDATE - 必须完成**]
+Your WeChat profile is INCOMPLETE. You MUST provide the following in your JSON response:
+${needWxId ? '- wxId: Your personal WeChat ID (5-20 characters, letters/numbers/underscore, must start with letter, e.g., "xiaoming_2024", "alice666")' : ''}
+${needSignature ? '- signature: Your personal signature/mood (个性签名), reflecting your personality or current mood (e.g., "生活不止眼前的苟且", "今天也要元气满满", "懒癌晚期患者")' : ''}
+
+**THIS IS NOT OPTIONAL** - You must include a valid "profile" object in your response!
+Example: "profile": {"wxId": "your_custom_id", "signature": "你的个性签名"}
+[END MANDATORY PROFILE UPDATE]
+`
+  }
 
   // 构建综合提示（profile + spy chats + moments + user moments interaction + redpackets）
   let jsonTaskPrompt = `
-
+${profilePrompt}
 [RESPONSE FORMAT - STRICT RAW JSON ONLY]
 CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
 - NO \`\`\`json
@@ -1399,7 +1419,7 @@ CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
 Your response MUST be a valid JSON object with this structure:
 {
   "reply": "your chat message here (use ### to split multiple messages)",
-  "profile": ${needWxId || needSignature ? '{"wxId": "your_wechat_id", "signature": "你的个性签名"}' : 'null'},
+  "profile": ${needWxId || needSignature ? '{"wxId": "your_wechat_id", "signature": "你的个性签名"} /* REQUIRED - 必须填写! */' : 'null'},
   "redpackets": null,
   "spyChats": null,
   "moment": null,
@@ -1409,7 +1429,7 @@ Your response MUST be a valid JSON object with this structure:
 
 FIELD DETAILS:
 - reply: (REQUIRED) Your chat message. Use ### to split into multiple messages.
-- profile: ${needWxId || needSignature ? '(REQUIRED NOW) Must include wxId and/or signature' : '(optional) null or {"wxId": "...", "signature": "..."}'}
+- profile: ${needWxId || needSignature ? '(**REQUIRED NOW - 必须填写!**) Must include wxId and/or signature. DO NOT leave this as null!' : '(optional) null or {"wxId": "...", "signature": "..."}'}
 - redpackets: null or [{"amount": "5.20", "note": "爱你"}]
 - spyChats: null or array of spy chat sessions
 - moment: null or {"content": "朋友圈内容", "location": "位置"}
