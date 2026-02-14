@@ -442,6 +442,15 @@ function handleGroupDeleted() {
   currentView.value = 'chats'
 }
 
+// 群信息更新后的处理（如移除成员、修改群名等）
+function handleGroupUpdated(updatedGroup) {
+  // 更新本地 groups 数组中的对应群数据
+  const index = groups.value.findIndex(g => g.id === updatedGroup.id)
+  if (index >= 0) {
+    groups.value[index] = updatedGroup
+  }
+}
+
 // 添加成员到现有群（从群信息页触发）
 function handleAddMemberToGroup(groupId) {
   // 找到群的主角色
@@ -576,6 +585,7 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
       @back="goBack"
       @deleted="handleGroupDeleted"
       @addMember="handleAddMemberToGroup"
+      @updated="handleGroupUpdated"
     />
 
     <!-- 成员选择器（创建新群聊） -->
