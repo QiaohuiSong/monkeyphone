@@ -45,6 +45,16 @@ const isSending = ref(false)
 const isSendingQueue = ref(false)
 const chatListRef = ref(null)
 
+// 获取群显示名称（带动态人数后缀）
+const displayGroupName = computed(() => {
+  if (!group.value?.name) return '群聊'
+  // 移除可能已有的人数后缀
+  const baseName = group.value.name.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim()
+  // 计算总人数：members + 1（用户自己）
+  const totalCount = (group.value.members?.length || 0) + 1
+  return `${baseName}（${totalCount}）`
+})
+
 // 红包数据缓存
 const redPacketCache = reactive({})
 
@@ -463,7 +473,7 @@ async function deleteMessage() {
       <button class="icon-btn" @click="goBack">
         <ArrowLeft :size="22" />
       </button>
-      <span class="title">{{ group?.name || '群聊' }}</span>
+      <span class="title">{{ displayGroupName }}</span>
       <button class="icon-btn" @click="openGroupInfo">
         <MoreHorizontal :size="22" />
       </button>

@@ -31,6 +31,20 @@ const showPersonaSelector = ref(false)
 const showNameEditor = ref(false)
 const editingName = ref('')
 
+// 群成员总数（包含"我"）
+const totalMemberCount = computed(() => {
+  if (!group.value?.members) return 1
+  return group.value.members.length + 1 // +1 for user "我"
+})
+
+// 显示的群名称（带人数后缀）
+const displayGroupName = computed(() => {
+  if (!group.value?.name) return ''
+  // 移除可能已有的人数后缀，然后添加正确的人数
+  const baseName = group.value.name.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim()
+  return `${baseName}（${totalMemberCount.value}）`
+})
+
 // 当前绑定的人设
 const boundPersona = computed(() => {
   if (!group.value) return null
@@ -105,8 +119,8 @@ async function removeMember(memberId) {
 
   try {
     group.value = await updateGroup(props.groupId, {
-      members: newMembers,
-      name: `${group.value.name.split(' ')[0]} (${newMembers.length + 1}人)` // +1 for user
+      members: newMembers
+      // 不再更新名称，人数会动态计算显示
     })
     emit('updated', group.value)
   } catch (e) {
@@ -165,7 +179,9 @@ async function confirmClearChats() {
 
 // 群名称编辑相关
 function openNameEditor() {
-  editingName.value = group.value?.name || ''
+  // 编辑时显示不含人数后缀的基础名称
+  const baseName = group.value?.name?.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim() || ''
+  editingName.value = baseName
   showNameEditor.value = true
 }
 
@@ -249,7 +265,7 @@ function getMemberTypeClass(type) {
         <div class="menu-item" @click="openNameEditor">
           <span class="menu-label">群聊名称</span>
           <div class="menu-value">
-            <span>{{ group.name }}</span>
+            <span>{{ displayGroupName }}</span>
             <ChevronRight :size="18" class="chevron" />
           </div>
         </div>

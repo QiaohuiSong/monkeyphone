@@ -235,6 +235,16 @@ function isTyping(charId) {
   return chatStore.isPending(charId)
 }
 
+// 获取群显示名称（带动态人数后缀）
+function getGroupDisplayName(group) {
+  if (!group?.name) return ''
+  // 移除可能已有的人数后缀
+  const baseName = group.name.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim()
+  // 计算总人数：members + 1（用户自己）
+  const totalCount = (group.members?.length || 0) + 1
+  return `${baseName}（${totalCount}）`
+}
+
 function switchTab(tabId) {
   currentTab.value = tabId
   currentView.value = tabId
@@ -361,8 +371,8 @@ async function handleMembersSelected(selectedMembers) {
       }))
     ]
 
-    // 创建群名：角色名的群聊（人数）
-    const groupName = `${mainChar.name}的群聊（${members.length}）`
+    // 创建群名：角色名的群聊（不含人数后缀，显示时动态计算）
+    const groupName = `${mainChar.name}的群聊`
 
     // 创建群
     const group = await createGroup({
@@ -619,8 +629,8 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
                 <Users :size="24" />
               </div>
               <div class="chat-info">
-                <div class="chat-name">{{ group.name }}</div>
-                <div class="chat-preview">[群聊] {{ group.members?.length || 0 }} 人</div>
+                <div class="chat-name">{{ getGroupDisplayName(group) }}</div>
+                <div class="chat-preview">[群聊]</div>
               </div>
             </div>
 
