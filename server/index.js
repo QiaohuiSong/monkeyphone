@@ -1385,8 +1385,8 @@ CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
 Your response MUST be a valid JSON object with this structure:
 {
   "reply": "your chat message here (use ### to split multiple messages)",
+  "profile": ${needWxId || needSignature ? '{"wxId": "your_wechat_id", "signature": "你的个性签名"}' : 'null'},
   "redpackets": null,
-  "profile": null,
   "spyChats": null,
   "moment": null,
   "momentInteractions": null,
@@ -1394,9 +1394,9 @@ Your response MUST be a valid JSON object with this structure:
 }
 
 FIELD DETAILS:
-- reply: (required) Your chat message. Use ### to split into multiple messages.
+- reply: (REQUIRED) Your chat message. Use ### to split into multiple messages.
+- profile: ${needWxId || needSignature ? '(REQUIRED NOW) Must include wxId and/or signature' : '(optional) null or {"wxId": "...", "signature": "..."}'}
 - redpackets: null or [{"amount": "5.20", "note": "爱你"}]
-- profile: null or {"wxId": "your_id", "signature": "个性签名"}
 - spyChats: null or array of spy chat sessions
 - moment: null or {"content": "朋友圈内容", "location": "位置"}
 - momentInteractions: null or array of interactions with user moments
@@ -1431,13 +1431,24 @@ IMPORTANT:
 - You can send multiple red packets in one response if the situation calls for it
 - The red packet will appear as a clickable message in the chat
 
-[PROFILE UPDATE TASK]
+[PROFILE UPDATE TASK - ${needWxId || needSignature ? 'ACTION REQUIRED' : 'OPTIONAL'}]
 Current profile:
-- WeChat ID (wxId): ${wechatProfile?.wxId || 'not set'}
-- Signature: ${wechatProfile?.signature || 'not set'}
+- WeChat ID (wxId): ${wechatProfile?.wxId || 'NOT SET - MUST GENERATE'}
+- Signature: ${wechatProfile?.signature || 'NOT SET - MUST GENERATE'}
 
-${needWxId ? 'Generate a realistic WeChat ID: 6-20 chars, start with letter, only letters/numbers/underscore. Match your personality.' : ''}
-${needSignature ? 'Create a personal signature reflecting your mood/personality (max 30 chars).' : 'You may update signature based on mood, or set to null to keep unchanged.'}
+${needWxId ? `**MANDATORY**: You MUST generate a WeChat ID now. Rules:
+- 6-20 characters long
+- Must start with a letter (a-z, A-Z)
+- Only letters, numbers, and underscores allowed
+- Should reflect your personality (e.g., "xiaoyu_520", "coolboy666", "mengmeng_cat")
+- DO NOT use generic IDs like "wxid_xxx"
+Set profile.wxId in your response!` : 'wxId is already set, no need to change.'}
+
+${needSignature ? `**MANDATORY**: You MUST create a personal signature now.
+- Max 30 characters
+- Reflect your current mood or personality
+- Examples: "岁月静好", "努力变优秀✨", "吃货一枚🍜", "随遇而安"
+Set profile.signature in your response!` : 'You may update signature based on mood, or set profile to null to keep unchanged.'}
 
 [SPY CHAT GENERATION TASK]
 You can generate chat conversations with your NPC contacts (关系组成员) that could be discovered on your phone.
@@ -1541,7 +1552,9 @@ Your ENTIRE response must be a single valid JSON object.
 DO NOT use \`\`\`json or \`\`\` - output raw JSON directly.
 
 CORRECT (raw JSON):
-{"reply": "早安呀~吃早餐了吗？","redpackets": null,"profile": null,"spyChats": null,"moment": null,"momentInteractions": null,"affection": {"change": 0, "reason": "普通问候"}}
+${needWxId || needSignature
+  ? '{"reply": "早安呀~","profile": {"wxId": "xiaoyu_520", "signature": "今天也要开心"},"redpackets": null,"spyChats": null,"moment": null,"momentInteractions": null,"affection": {"change": 1, "reason": "问候"}}'
+  : '{"reply": "早安呀~吃早餐了吗？","profile": null,"redpackets": null,"spyChats": null,"moment": null,"momentInteractions": null,"affection": {"change": 0, "reason": "普通问候"}}'}
 
 WRONG (with Markdown):
 \`\`\`json
@@ -1706,17 +1719,19 @@ ${jsonTaskPrompt}`
           if (wxIdRegex.test(parsed.profile.wxId)) {
             wechatProfile.wxId = parsed.profile.wxId
             updated = true
+            console.log(`[Profile] 更新微信号: ${parsed.profile.wxId}`)
           }
         }
         if (parsed.profile.signature !== undefined && parsed.profile.signature !== null) {
           wechatProfile.signature = parsed.profile.signature.slice(0, 30)
           updated = true
-          }
-          if (updated) {
-            wechatProfile.updatedAt = new Date().toISOString()
-            await fs.writeJson(wechatProfilePath, wechatProfile, { spaces: 2 })
-          }
+          console.log(`[Profile] 更新个性签名: ${parsed.profile.signature}`)
         }
+        if (updated) {
+          wechatProfile.updatedAt = new Date().toISOString()
+          await fs.writeJson(wechatProfilePath, wechatProfile, { spaces: 2 })
+        }
+      }
 
         // 处理红包 - 将红包信息附加到 reply 中供前端解析
         if (parsed.redpackets && Array.isArray(parsed.redpackets) && parsed.redpackets.length > 0) {
