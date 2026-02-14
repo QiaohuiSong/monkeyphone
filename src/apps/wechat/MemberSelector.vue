@@ -38,6 +38,7 @@ const newNpcForm = ref({
 const isCreating = ref(false)
 
 const isLoading = ref(false)
+const isSubmitting = ref(false)
 
 // 可选的预设 NPC（排除已在群里的）
 const availablePresetNpcs = computed(() => {
@@ -120,6 +121,8 @@ function isSelected(memberId) {
 }
 
 function confirmSelection() {
+  if (isSubmitting.value) return
+  isSubmitting.value = true
   emit('select', selectedMembers.value)
 }
 
@@ -197,9 +200,9 @@ function triggerAvatarUpload() {
         class="icon-btn text-btn"
         :class="{ active: selectedMembers.length > 0 }"
         @click="confirmSelection"
-        :disabled="selectedMembers.length === 0"
+        :disabled="selectedMembers.length === 0 || isSubmitting"
       >
-        完成 ({{ selectedMembers.length }})
+        {{ isSubmitting ? '处理中...' : `完成 (${selectedMembers.length})` }}
       </button>
     </div>
 

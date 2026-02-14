@@ -38,6 +38,7 @@ const selectedRedPacketId = ref(null)
 const pendingGroupCharId = ref(null) // 待创建群聊的角色ID
 const isGroupSpyMode = ref(false) // 群聊偷看模式
 const spyGroupCharId = ref('') // 偷看模式下的主角色ID
+const isCreatingGroup = ref(false) // 防止重复创建群聊
 
 // 用户人设
 const currentPersona = ref(null)
@@ -307,11 +308,15 @@ function openMemberSelector(charId) {
 
 // 处理成员选择完成（创建群聊）
 async function handleMembersSelected(selectedMembers) {
+  // 防止重复创建
+  if (isCreatingGroup.value) return
+
   if (!pendingGroupCharId.value || selectedMembers.length === 0) {
     currentView.value = 'contacts'
     return
   }
 
+  isCreatingGroup.value = true
   try {
     // 获取主角色信息（先从自己的角色找，再从广场角色找，最后单独获取）
     let mainChar = characters.value.find(c => c.id === pendingGroupCharId.value)
@@ -370,6 +375,8 @@ async function handleMembersSelected(selectedMembers) {
     console.error('创建群聊失败:', e)
     alert('创建群聊失败: ' + e.message)
     currentView.value = 'contacts'
+  } finally {
+    isCreatingGroup.value = false
   }
 }
 
