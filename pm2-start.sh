@@ -52,9 +52,10 @@ echo ""
 
 echo "[依赖检查]"
 
-# 检查前端依赖
-if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+# 检查前端依赖（检查关键依赖包是否存在）
+if [ ! -d "$SCRIPT_DIR/node_modules" ] || [ ! -d "$SCRIPT_DIR/node_modules/vue" ]; then
     echo "📦 安装前端依赖..."
+    cd "$SCRIPT_DIR"
     npm install
     if [ $? -ne 0 ]; then
         echo "❌ 前端依赖安装失败"
@@ -65,8 +66,8 @@ else
     echo "✅ 前端依赖已存在"
 fi
 
-# 检查后端依赖
-if [ ! -d "$SCRIPT_DIR/server/node_modules" ]; then
+# 检查后端依赖（检查关键依赖包是否存在）
+if [ ! -d "$SCRIPT_DIR/server/node_modules" ] || [ ! -d "$SCRIPT_DIR/server/node_modules/express" ]; then
     echo "📦 安装后端依赖..."
     cd "$SCRIPT_DIR/server"
     npm install
@@ -86,9 +87,10 @@ echo ""
 
 echo "[构建前端]"
 
-# 检查是否需要重新构建
-if [ ! -d "$SCRIPT_DIR/dist" ]; then
+# 检查是否需要重新构建（检查 dist/index.html 是否存在）
+if [ ! -f "$SCRIPT_DIR/dist/index.html" ]; then
     echo "📦 构建前端..."
+    cd "$SCRIPT_DIR"
     npm run build
     if [ $? -ne 0 ]; then
         echo "❌ 前端构建失败"
@@ -97,6 +99,18 @@ if [ ! -d "$SCRIPT_DIR/dist" ]; then
     echo "✅ 前端构建完成"
 else
     echo "✅ 前端已构建（如需重新构建请先删除 dist 目录）"
+fi
+
+echo ""
+
+# ============ 创建数据目录 ============
+
+echo "[数据目录]"
+if [ ! -d "$SCRIPT_DIR/server/data" ]; then
+    mkdir -p "$SCRIPT_DIR/server/data"
+    echo "✅ 创建 server/data 目录"
+else
+    echo "✅ server/data 目录已存在"
 fi
 
 echo ""
@@ -110,26 +124,44 @@ pm2 delete monkeyphone-backend 2>/dev/null
 
 # 启动后端服务（同时托管前端静态文件）
 echo "启动后端服务..."
-pm2 start "$SCRIPT_DIR/server/index.js" --name "monkeyphone-backend" --cwd "$SCRIPT_DIR/server"
+cd "$SCRIPT_DIR/server"
+pm2 start index.js --name "monkeyphone-backend"
+
+if [ $? -ne 0 ]; then
+    echo "❌ 服务启动失败"
+    echo "请查看日志: pm2 logs monkeyphone-backend"
+    exit 1
+fi
 
 # 保存 PM2 配置
 pm2 save
 
-echo ""
-echo "================================"
-echo "  🎉 服务启动成功！"
-echo "================================"
-echo ""
-echo "  🌐 访问地址: http://localhost:5173"
-echo ""
-echo "  📋 PM2 常用命令:"
-echo "     查看状态: pm2 status"
-echo "     查看日志: pm2 logs monkeyphone-backend"
-echo "     监控面板: pm2 monit"
-echo ""
-echo "  🛑 停止服务: ./pm2-stop.sh"
-echo "  🔄 重新构建: rm -rf dist && ./pm2-start.sh"
-echo ""
+# 等待服务启动
+sleep 2
+
+# 检查服务是否正常运行
+if pm2 list | grep -q "monkeyphone-backend.*online"; then
+    echo ""
+    echo "================================"
+    echo "  🎉 服务启动成功！"
+    echo "================================"
+    echo ""
+    echo "  🌐 访问地址: http://localhost:5173"
+    echo ""
+    echo "  📋 PM2 常用命令:"
+    echo "     查看状态: pm2 status"
+    echo "     查看日志: pm2 logs monkeyphone-backend"
+    echo "     监控面板: pm2 monit"
+    echo ""
+    echo "  🛑 停止服务: ./pm2-stop.sh"
+    echo "  🔄 重新构建: rm -rf dist && ./pm2-start.sh"
+    echo ""
+else
+    echo ""
+    echo "⚠️  服务可能启动失败，请检查日志:"
+    echo "    pm2 logs monkeyphone-backend --lines 50"
+    echo ""
+fi
 
 # 显示当前状态
 pm2 status
