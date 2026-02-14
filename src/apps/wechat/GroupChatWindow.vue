@@ -50,8 +50,9 @@ const displayGroupName = computed(() => {
   if (!group.value?.name) return '群聊'
   // 移除可能已有的人数后缀
   const baseName = group.value.name.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim()
-  // 计算总人数：members + 1（用户自己）
-  const totalCount = (group.value.members?.length || 0) + 1
+  // 计算总人数：过滤掉 player 后的 members + 1（用户自己）
+  const nonPlayerMembers = (group.value.members || []).filter(m => m.id !== 'player' && m.type !== 'player')
+  const totalCount = nonPlayerMembers.length + 1
   return `${baseName}（${totalCount}）`
 })
 

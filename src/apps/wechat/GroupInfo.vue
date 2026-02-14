@@ -34,7 +34,15 @@ const editingName = ref('')
 // 群成员总数（包含"我"）
 const totalMemberCount = computed(() => {
   if (!group.value?.members) return 1
-  return group.value.members.length + 1 // +1 for user "我"
+  // 过滤掉可能存在的 player 成员，避免重复计算
+  const nonPlayerMembers = group.value.members.filter(m => m.id !== 'player' && m.type !== 'player')
+  return nonPlayerMembers.length + 1 // +1 for user "我"
+})
+
+// 过滤后的成员列表（排除 player，因为 player 是单独显示的）
+const filteredMembers = computed(() => {
+  if (!group.value?.members) return []
+  return group.value.members.filter(m => m.id !== 'player' && m.type !== 'player')
 })
 
 // 显示的群名称（带人数后缀）
@@ -287,9 +295,9 @@ function getMemberTypeClass(type) {
             <div class="member-type user">我</div>
           </div>
 
-          <!-- 其他成员列表 -->
+          <!-- 其他成员列表（排除 player，因为上面已单独显示） -->
           <div
-            v-for="member in group.members"
+            v-for="member in filteredMembers"
             :key="member.id"
             class="member-item"
           >
@@ -300,7 +308,7 @@ function getMemberTypeClass(type) {
               </div>
               <!-- 编辑模式下显示删除按钮 -->
               <button
-                v-if="isEditMode && group.members.length > 1"
+                v-if="isEditMode && filteredMembers.length > 1"
                 class="remove-btn"
                 @click="removeMember(member.id)"
               >

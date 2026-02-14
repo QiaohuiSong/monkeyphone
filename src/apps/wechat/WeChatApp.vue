@@ -240,8 +240,9 @@ function getGroupDisplayName(group) {
   if (!group?.name) return ''
   // 移除可能已有的人数后缀
   const baseName = group.name.replace(/（\d+）$/, '').replace(/\(\d+\)$/, '').trim()
-  // 计算总人数：members + 1（用户自己）
-  const totalCount = (group.members?.length || 0) + 1
+  // 计算总人数：过滤掉 player 后的 members + 1（用户自己）
+  const nonPlayerMembers = (group.members || []).filter(m => m.id !== 'player' && m.type !== 'player')
+  const totalCount = nonPlayerMembers.length + 1
   return `${baseName}（${totalCount}）`
 }
 
@@ -348,14 +349,8 @@ async function handleMembersSelected(selectedMembers) {
       return
     }
 
-    // 构建成员列表（包含玩家、主角色、选中的NPC）
+    // 构建成员列表（主角色 + 选中的NPC，不包含玩家，玩家是隐含的）
     const members = [
-      {
-        id: 'player',
-        name: currentPersona.value?.name || '我',
-        avatar: currentPersona.value?.avatar || '',
-        type: 'player'
-      },
       {
         id: mainChar.id,
         name: mainChar.name,
