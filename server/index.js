@@ -1444,11 +1444,28 @@ ${needWxId ? `**MANDATORY**: You MUST generate a WeChat ID now. Rules:
 - DO NOT use generic IDs like "wxid_xxx"
 Set profile.wxId in your response!` : 'wxId is already set, no need to change.'}
 
-${needSignature ? `**MANDATORY**: You MUST create a personal signature now.
+[SIGNATURE UPDATE - AUTONOMOUS DECISION]
+Current signature: "${wechatProfile?.signature || '未设置'}"
+${needSignature ? `**MANDATORY**: You MUST create a personal signature now since you don't have one.` : `You can AUTONOMOUSLY decide to update your signature based on:`}
+- Your current emotional state (happy, sad, thoughtful, excited, etc.)
+- Something meaningful from the conversation
+- A mood change or life event
+- When you want to express something indirectly
+
+Signature guidelines:
 - Max 30 characters
-- Reflect your current mood or personality
-- Examples: "岁月静好", "努力变优秀✨", "吃货一枚🍜", "随遇而安"
-Set profile.signature in your response!` : 'You may update signature based on mood, or set profile to null to keep unchanged.'}
+- Can be cryptic, poetic, casual, or emotional
+- Use emojis naturally if it fits your style
+- Examples: "岁月静好", "今天超开心✨", "有点想你", "深夜emo中🌙", "努力ing", "随遇而安"
+
+Decision logic:
+- If your mood changed significantly → consider updating
+- If something important happened → consider updating
+- If you want to hint at your feelings → consider updating
+- Otherwise → set profile to null to keep unchanged
+
+To update: set profile.signature to your new signature
+To keep unchanged: set profile to null
 
 [SPY CHAT GENERATION TASK]
 You can generate chat conversations with your NPC contacts (关系组成员) that could be discovered on your phone.
