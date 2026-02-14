@@ -338,8 +338,14 @@ async function handleMembersSelected(selectedMembers) {
       return
     }
 
-    // 构建成员列表
+    // 构建成员列表（包含玩家、主角色、选中的NPC）
     const members = [
+      {
+        id: 'player',
+        name: currentPersona.value?.name || '我',
+        avatar: currentPersona.value?.avatar || '',
+        type: 'player'
+      },
       {
         id: mainChar.id,
         name: mainChar.name,
