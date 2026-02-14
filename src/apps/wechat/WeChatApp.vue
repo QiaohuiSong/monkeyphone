@@ -313,9 +313,22 @@ async function handleMembersSelected(selectedMembers) {
   }
 
   try {
-    // 获取主角色信息
-    const mainChar = characters.value.find(c => c.id === pendingGroupCharId.value)
+    // 获取主角色信息（先从自己的角色找，再从广场角色找，最后单独获取）
+    let mainChar = characters.value.find(c => c.id === pendingGroupCharId.value)
     if (!mainChar) {
+      mainChar = chattedPlazaCharacters.value.find(c => c.id === pendingGroupCharId.value)
+    }
+    if (!mainChar) {
+      // 广场角色可能不在列表中，单独获取
+      try {
+        mainChar = await getCharacterForChat(pendingGroupCharId.value)
+      } catch (e) {
+        console.error('获取角色信息失败:', e)
+      }
+    }
+
+    if (!mainChar) {
+      alert('无法获取角色信息')
       currentView.value = 'contacts'
       return
     }
