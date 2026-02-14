@@ -1376,43 +1376,31 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
   // 构建综合提示（profile + spy chats + moments + user moments interaction + redpackets）
   let jsonTaskPrompt = `
 
-[RESPONSE FORMAT - MUST BE VALID JSON]
+[RESPONSE FORMAT - STRICT RAW JSON ONLY]
+CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
+- NO \`\`\`json
+- NO \`\`\`
+- Start your response directly with { and end with }
+
 Your response MUST be a valid JSON object with this structure:
 {
   "reply": "your chat message here (use ### to split multiple messages)",
-  "redpackets": null or [
-    {"amount": "金额数字", "note": "祝福语"}
-  ],
-  "profile": {
-    ${needWxId ? '"wxId": "your_new_wechat_id",' : ''}
-    "signature": "your signature or null to keep unchanged"
-  },
-  "spyChats": null or [
-    {
-      "sessionId": "unique_id_like_ex_girlfriend",
-      "sessionName": "Display Name (e.g., 前女友)",
-      "messages": [
-        {"sender": "character", "text": "message from you"},
-        {"sender": "npc", "senderName": "Other Person Name", "text": "message from them"}
-      ]
-    }
-  ],
-  "moment": null or {
-    "content": "朋友圈文字内容",
-    "location": "可选的位置信息"
-  },
-  "momentInteractions": null or [
-    {
-      "momentId": "the moment id you're interacting with",
-      "like": true or false,
-      "comment": "optional comment text or null"
-    }
-  ],
-  "affection": {
-    "change": <number from -10 to 10>,
-    "reason": "brief Chinese explanation"
-  }
+  "redpackets": null,
+  "profile": null,
+  "spyChats": null,
+  "moment": null,
+  "momentInteractions": null,
+  "affection": {"change": 0, "reason": "无明显变化"}
 }
+
+FIELD DETAILS:
+- reply: (required) Your chat message. Use ### to split into multiple messages.
+- redpackets: null or [{"amount": "5.20", "note": "爱你"}]
+- profile: null or {"wxId": "your_id", "signature": "个性签名"}
+- spyChats: null or array of spy chat sessions
+- moment: null or {"content": "朋友圈内容", "location": "位置"}
+- momentInteractions: null or array of interactions with user moments
+- affection: {"change": -10 to 10, "reason": "简短中文原因"}
 
 [RED PACKET (红包) GENERATION TASK]
 You can send red packets (hongbao) to the user! This is a special WeChat feature to express care, celebration, or affection.
@@ -1546,7 +1534,21 @@ Add this to your JSON response:
 "affection": {
   "change": <number from -10 to 10>,
   "reason": "<brief Chinese explanation of why>"
-}`
+}
+
+[FINAL REMINDER - NO MARKDOWN]
+Your ENTIRE response must be a single valid JSON object.
+DO NOT use \`\`\`json or \`\`\` - output raw JSON directly.
+
+CORRECT (raw JSON):
+{"reply": "早安呀~吃早餐了吗？","redpackets": null,"profile": null,"spyChats": null,"moment": null,"momentInteractions": null,"affection": {"change": 0, "reason": "普通问候"}}
+
+WRONG (with Markdown):
+\`\`\`json
+{"reply": "..."}
+\`\`\`
+
+Start your response with { now.`
 
   // 构建用户信息提示
   let userInfoPrompt = ''
