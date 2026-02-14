@@ -132,7 +132,7 @@ async function getHealthContextForUser(userId) {
 }
 
 const app = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 3000  // 默认3000（开发环境），生产环境通过环境变量设置
 const NEWAPI_BASE_URL = 'https://monkeyapi.apimonkey.online'
 
 // 创建 HTTP 服务器（用于 WebSocket）

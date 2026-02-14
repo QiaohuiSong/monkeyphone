@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# ============ 配置 ============
+# 生产环境端口（默认5173，可通过环境变量 PORT 覆盖）
+PROD_PORT=${PORT:-5173}
+
 echo "================================"
 echo "  MonkeyPhone PM2 启动脚本"
 echo "================================"
@@ -123,9 +127,9 @@ echo "[启动服务]"
 pm2 delete monkeyphone-backend 2>/dev/null
 
 # 启动后端服务（同时托管前端静态文件）
-echo "启动后端服务..."
+echo "启动后端服务（端口: $PROD_PORT）..."
 cd "$SCRIPT_DIR/server"
-pm2 start index.js --name "monkeyphone-backend"
+PORT=$PROD_PORT pm2 start index.js --name "monkeyphone-backend"
 
 if [ $? -ne 0 ]; then
     echo "❌ 服务启动失败"
@@ -146,7 +150,7 @@ if pm2 list | grep -q "monkeyphone-backend.*online"; then
     echo "  🎉 服务启动成功！"
     echo "================================"
     echo ""
-    echo "  🌐 访问地址: http://localhost:3000"
+    echo "  🌐 访问地址: http://localhost:$PROD_PORT"
     echo ""
     echo "  📋 PM2 常用命令:"
     echo "     查看状态: pm2 status"
