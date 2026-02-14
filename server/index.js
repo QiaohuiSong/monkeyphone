@@ -1076,7 +1076,25 @@ app.get('/api/models', authMiddleware, async (req, res) => {
 // 获取我的角色列表
 app.get('/api/characters', authMiddleware, (req, res) => {
   const characters = getCharacters(req.user.username)
-  res.json({ success: true, data: characters })
+  const brief = req.query.brief === 'true'
+
+  if (brief) {
+    // 简要模式：只返回必要字段，减少传输数据量
+    const briefData = characters.map(c => ({
+      id: c.id,
+      name: c.name,
+      avatar: c.avatar, // 头像保留，用于列表显示
+      bio: c.bio ? (c.bio.length > 50 ? c.bio.slice(0, 50) + '...' : c.bio) : '',
+      isPublic: c.isPublic,
+      npcs: c.npcs ? c.npcs.map(npc => ({ id: npc.id, name: npc.name, avatar: npc.avatar })) : [],
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt
+    }))
+    res.json({ success: true, data: briefData })
+  } else {
+    // 完整模式：返回所有字段
+    res.json({ success: true, data: characters })
+  }
 })
 
 // 获取单个角色

@@ -10,6 +10,7 @@ const emit = defineEmits(['create', 'edit'])
 
 const characters = ref([])
 const loading = ref(true)
+const importing = ref(false) // 导入中状态
 const fileInputRef = ref(null)
 
 // 导出相关
@@ -262,6 +263,7 @@ function startChat(char) {
 }
 
 function triggerImport() {
+  if (importing.value) return
   fileInputRef.value?.click()
 }
 
@@ -269,6 +271,7 @@ async function handleImport(event) {
   const file = event.target.files[0]
   if (!file) return
 
+  importing.value = true
   try {
     if (file.name.endsWith('.json')) {
       // 导入 JSON
@@ -296,6 +299,8 @@ async function handleImport(event) {
     }
   } catch (e) {
     alert('导入失败: ' + e.message)
+  } finally {
+    importing.value = false
   }
 
   // 清空 input 以便重复选择同一文件
@@ -424,9 +429,9 @@ async function extractPngMetadata(arrayBuffer) {
         <Plus :size="18" />
         <span>创建角色</span>
       </button>
-      <button class="import-btn" @click="triggerImport">
+      <button class="import-btn" @click="triggerImport" :disabled="importing">
         <Upload :size="18" />
-        <span>导入</span>
+        <span>{{ importing ? '导入中...' : '导入' }}</span>
       </button>
     </div>
 
@@ -440,7 +445,9 @@ async function extractPngMetadata(arrayBuffer) {
     />
 
     <!-- 加载中 -->
-    <div v-if="loading" class="loading">加载中...</div>
+    <div v-if="loading || importing" class="loading">
+      {{ importing ? '正在导入角色卡...' : '加载中...' }}
+    </div>
 
     <!-- 空状态 -->
     <div v-else-if="characters.length === 0" class="empty">

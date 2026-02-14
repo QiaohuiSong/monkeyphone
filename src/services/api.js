@@ -122,7 +122,14 @@ export async function getModels() {
 
 // ==================== 角色卡 API ====================
 
-export async function getMyCharacters() {
+// 获取我的角色列表（简要模式，用于列表显示）
+export async function getMyCharacters(brief = true) {
+  const data = await request(`/api/characters${brief ? '?brief=true' : ''}`)
+  return data.data
+}
+
+// 获取我的角色列表（完整模式，用于编辑等场景）
+export async function getMyCharactersFull() {
   const data = await request('/api/characters')
   return data.data
 }
