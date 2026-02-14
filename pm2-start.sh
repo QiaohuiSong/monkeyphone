@@ -146,7 +146,7 @@ if pm2 list | grep -q "monkeyphone-backend.*online"; then
     echo "  🎉 服务启动成功！"
     echo "================================"
     echo ""
-    echo "  🌐 访问地址: http://localhost:522"
+    echo "  🌐 访问地址: http://localhost:13376"
     echo ""
     echo "  📋 PM2 常用命令:"
     echo "     查看状态: pm2 status"
