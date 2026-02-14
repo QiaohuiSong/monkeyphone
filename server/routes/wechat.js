@@ -577,7 +577,7 @@ router.post('/:charId/send', authMiddleware, async (req, res) => {
   try {
     const { charId } = req.params
     const username = req.user.username
-    const { sessionId = 'player', text, sender = 'player', senderName, type, redpacketData, transferData } = req.body
+    const { sessionId = 'player', text, sender = 'player', senderName, type, redpacketData, transferData, stickerUrl } = req.body
 
     if (!text) {
       return res.status(400).json({ error: '消息内容不能为空' })
@@ -603,6 +603,9 @@ router.post('/:charId/send', authMiddleware, async (req, res) => {
     }
     if (transferData) {
       message.transferData = transferData
+    }
+    if (stickerUrl) {
+      message.stickerUrl = stickerUrl
     }
 
     await withLock(`chat:${username}:${charId}:${sessionId}`, async () => {

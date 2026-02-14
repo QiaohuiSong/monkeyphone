@@ -122,11 +122,12 @@ export async function getChatMessages(charId, sessionId, options = {}) {
 }
 
 export async function sendChatMessage(charId, text, sessionId = 'player', sender = 'player', senderName, options = {}) {
-  const { type, redpacketData, transferData } = options
+  const { type, redpacketData, transferData, stickerUrl } = options
   const body = { sessionId, text, sender, senderName }
   if (type) body.type = type
   if (redpacketData) body.redpacketData = redpacketData
   if (transferData) body.transferData = transferData
+  if (stickerUrl) body.stickerUrl = stickerUrl
 
   const data = await request(`/api/wechat/${charId}/send`, {
     method: 'POST',

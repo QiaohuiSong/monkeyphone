@@ -770,16 +770,18 @@ async function sendSticker(sticker) {
   closeEmojiPanel()
 
   try {
-    // 发送贴纸消息
+    // 发送贴纸消息（包含 type 和 stickerUrl）
     const msg = await sendChatMessage(
       props.charId,
       '[表情]',
       props.sessionId,
-      'player'
+      'player',
+      undefined,
+      {
+        type: 'sticker',
+        stickerUrl: sticker.url
+      }
     )
-    // 标记为贴纸类型
-    msg.type = 'sticker'
-    msg.stickerUrl = sticker.url
     chatStore.addMessageToCache(props.charId, msg, props.sessionId)
     scrollToBottom()
   } catch (e) {
