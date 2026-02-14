@@ -14,10 +14,28 @@ const props = defineProps({
   groupId: { type: String, required: true },
   currentUserId: { type: String, default: 'user' },
   currentUserName: { type: String, default: '我' },
-  currentUserAvatar: { type: String, default: '' }
+  currentUserAvatar: { type: String, default: '' },
+  // 偷看模式相关
+  readOnly: { type: Boolean, default: false },
+  // 视角模式: 'player' = 我是玩家, 'spy' = 偷看模式（我是角色）
+  viewMode: { type: String, default: 'player' },
+  // 偷看模式下的主角色ID
+  spyCharId: { type: String, default: '' }
 })
 
 const emit = defineEmits(['back', 'openGroupInfo', 'openRedPacketDetail'])
+
+// 判断消息是否是"我方"发送的（根据视角）
+function isOwnMessage(msg) {
+  if (props.viewMode === 'spy') {
+    // 偷看模式：主角色的消息显示在右侧
+    // 判断是否是主角色发的消息（通过 sender_id 或 sender === 'character'）
+    return msg.sender_id === props.spyCharId || msg.sender === props.spyCharId
+  } else {
+    // 正常模式：user 的消息显示在右侧
+    return msg.sender === 'user'
+  }
+}
 
 const group = ref(null)
 const messages = ref([])
@@ -451,6 +469,11 @@ async function deleteMessage() {
       </button>
     </div>
 
+    <!-- 只读模式提示 -->
+    <div v-if="readOnly" class="readonly-banner">
+      偷看模式 - 只能查看，不能发送消息
+    </div>
+
     <!-- 聊天内容 -->
     <div class="chat-list" ref="chatListRef">
       <div v-if="isLoading" class="loading-tip">加载中...</div>
@@ -462,7 +485,7 @@ async function deleteMessage() {
         v-for="msg in messages"
         :key="msg.id"
         class="message-row"
-        :class="{ 'own': msg.sender === 'user', 'recalled': msg.type === 'recalled' }"
+        :class="{ 'own': isOwnMessage(msg), 'recalled': msg.type === 'recalled' }"
         @contextmenu="handleContextMenu($event, msg)"
         @touchstart="handleTouchStart($event, msg)"
         @touchend="handleTouchEnd"
@@ -476,7 +499,7 @@ async function deleteMessage() {
         <!-- 红包消息 -->
         <template v-else-if="msg.type === 'red_packet'">
           <!-- 他人发的红包 -->
-          <template v-if="msg.sender !== 'user'">
+          <template v-if="!isOwnMessage(msg)">
             <div class="avatar">
               <img v-if="msg.sender_avatar" :src="msg.sender_avatar" />
               <span v-else>{{ msg.sender_name?.[0] || '?' }}</span>
@@ -503,13 +526,14 @@ async function deleteMessage() {
               />
             </div>
             <div class="avatar own">
-              <span>我</span>
+              <img v-if="msg.sender_avatar" :src="msg.sender_avatar" />
+              <span v-else>{{ msg.sender_name?.[0] || '我' }}</span>
             </div>
           </template>
         </template>
 
         <!-- 他人普通消息：左侧头像 -->
-        <template v-else-if="msg.sender !== 'user'">
+        <template v-else-if="!isOwnMessage(msg)">
           <div class="avatar">
             <img v-if="msg.sender_avatar" :src="msg.sender_avatar" />
             <span v-else>{{ msg.sender_name?.[0] || '?' }}</span>
@@ -530,7 +554,8 @@ async function deleteMessage() {
             </div>
           </div>
           <div class="avatar own">
-            <span>我</span>
+            <img v-if="msg.sender_avatar" :src="msg.sender_avatar" />
+            <span v-else>{{ msg.sender_name?.[0] || '我' }}</span>
           </div>
         </template>
       </div>
@@ -629,7 +654,7 @@ async function deleteMessage() {
     </Teleport>
 
     <!-- 输入栏 -->
-    <div class="input-bar">
+    <div class="input-bar" v-if="!readOnly">
       <button class="icon-btn redpacket-btn" @click="openSendRedPacketModal" title="发红包">
         <Gift :size="20" />
       </button>
@@ -659,6 +684,10 @@ async function deleteMessage() {
         </button>
       </div>
     </div>
+    <!-- 只读模式底部 -->
+    <div v-else class="input-bar readonly">
+      <input type="text" placeholder="偷看模式，无法发送消息" disabled />
+    </div>
   </div>
 </template>
 
@@ -677,6 +706,14 @@ async function deleteMessage() {
   padding: 10px 12px;
   background: #ededed;
   border-bottom: 1px solid #d9d9d9;
+}
+
+.readonly-banner {
+  background: #fff3cd;
+  color: #856404;
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 13px;
 }
 
 .header .title {
@@ -841,6 +878,10 @@ async function deleteMessage() {
   border-top: 1px solid #e0e0e0;
 }
 
+.input-bar.readonly {
+  background: #eee;
+}
+
 .input-bar input {
   flex: 1;
   padding: 10px 14px;
@@ -849,6 +890,11 @@ async function deleteMessage() {
   background: #fff;
   font-size: 15px;
   outline: none;
+}
+
+.input-bar input:disabled {
+  background: #f5f5f5;
+  color: #999;
 }
 
 .redpacket-btn {

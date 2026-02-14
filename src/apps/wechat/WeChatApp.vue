@@ -36,6 +36,8 @@ const groups = ref([])
 const selectedGroupId = ref(null)
 const selectedRedPacketId = ref(null)
 const pendingGroupCharId = ref(null) // 待创建群聊的角色ID
+const isGroupSpyMode = ref(false) // 群聊偷看模式
+const spyGroupCharId = ref('') // 偷看模式下的主角色ID
 
 // 用户人设
 const currentPersona = ref(null)
@@ -277,13 +279,17 @@ function openPersonaManager() {
 // 打开群聊
 function openGroupChat(groupId) {
   selectedGroupId.value = groupId
+  isGroupSpyMode.value = false
+  spyGroupCharId.value = ''
   currentView.value = 'groupChat'
 }
 
 // 打开偷看模式的群聊（只读）
 function openSpyGroupChat(groupId, readOnly = true) {
   selectedGroupId.value = groupId
-  // TODO: 群聊偷看模式需要 GroupChatWindow 支持只读
+  isGroupSpyMode.value = readOnly
+  // 获取当前偷看的角色ID
+  spyGroupCharId.value = selectedCharId.value || ''
   currentView.value = 'groupChat'
 }
 
@@ -519,6 +525,9 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
     <GroupChatWindow
       v-else-if="currentView === 'groupChat'"
       :groupId="selectedGroupId"
+      :readOnly="isGroupSpyMode"
+      :viewMode="isGroupSpyMode ? 'spy' : 'player'"
+      :spyCharId="spyGroupCharId"
       @back="goBack"
       @openGroupInfo="openGroupInfo"
       @openRedPacketDetail="openRedPacketDetail"
