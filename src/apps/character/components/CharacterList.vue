@@ -3,7 +3,6 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Plus, Edit2, Trash2, Download, Upload, MessageCircle } from 'lucide-vue-next'
 import { getMyCharacters, deleteCharacter, importCharacterJson } from '../../../services/api.js'
-import { compressAvatar, compressPortrait } from '../../../utils/imageCompress.js'
 import CharacterCard from './CharacterCard.vue'
 
 const router = useRouter()
@@ -279,22 +278,6 @@ async function handleImport(event) {
       const text = await file.text()
       const data = JSON.parse(text)
 
-      // 压缩图片
-      if (data.avatar) {
-        data.avatar = await compressAvatar(data.avatar)
-      }
-      if (data.portrait) {
-        data.portrait = await compressPortrait(data.portrait)
-      }
-      // 压缩 NPC 头像
-      if (data.npcs && Array.isArray(data.npcs)) {
-        for (const npc of data.npcs) {
-          if (npc.avatar) {
-            npc.avatar = await compressAvatar(npc.avatar)
-          }
-        }
-      }
-
       await importCharacterJson(data)
       await loadCharacters()
       alert('导入成功')
@@ -303,22 +286,9 @@ async function handleImport(event) {
       const arrayBuffer = await file.arrayBuffer()
       const charData = await extractPngMetadata(arrayBuffer)
       if (charData) {
-        // 使用 PNG 本身作为头像，并压缩
+        // 使用 PNG 本身作为头像
         const base64 = await fileToBase64(file)
-        charData.avatar = await compressAvatar(base64)
-
-        // 压缩立绘
-        if (charData.portrait) {
-          charData.portrait = await compressPortrait(charData.portrait)
-        }
-        // 压缩 NPC 头像
-        if (charData.npcs && Array.isArray(charData.npcs)) {
-          for (const npc of charData.npcs) {
-            if (npc.avatar) {
-              npc.avatar = await compressAvatar(npc.avatar)
-            }
-          }
-        }
+        charData.avatar = base64
 
         await importCharacterJson(charData)
         await loadCharacters()
@@ -349,19 +319,20 @@ function fileToBase64(file) {
 }
 
 function uint8ArrayToString(arr) {
-  // 使用 TextDecoder 处理 UTF-8
-  try {
-    return new TextDecoder('utf-8').decode(arr)
-  } catch {
-    // 回退到分块处理
-    const chunkSize = 8192
-    let result = ''
-    for (let i = 0; i < arr.length; i += chunkSize) {
-      const chunk = arr.slice(i, i + chunkSize)
-      result += String.fromCharCode.apply(null, chunk)
-    }
-    return result
+  // 对于 base64 数据，需要逐字节转换为字符串
+  // 分块处理以避免栈溢出
+  const chunkSize = 8192
+  let result = ''
+  for (let i = 0; i < arr.length; i += chunkSize) {
+    const chunk = arr.slice(i, i + chunkSize)
+    result += String.fromCharCode.apply(null, Array.from(chunk))
   }
+  return result
+}
+
+function uint8ArrayToUtf8String(arr) {
+  // 使用 TextDecoder 处理 UTF-8 编码的文本
+  return new TextDecoder('utf-8').decode(arr)
 }
 
 async function extractPngMetadata(arrayBuffer) {
@@ -376,6 +347,64 @@ async function extractPngMetadata(arrayBuffer) {
     }
   }
 
+  // 解析角色数据的辅助函数
+  function parseCharaData(base64Text) {
+    // 使用安全的 base64 解码方式，支持大数据
+    const binaryStr = atob(base64Text)
+    const len = binaryStr.length
+    const bytes = new Uint8Array(len)
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i)
+    }
+    const jsonStr = new TextDecoder('utf-8').decode(bytes)
+    return JSON.parse(jsonStr)
+  }
+
+  // 将解析后的数据转换为我们的格式
+  function convertCharData(charData) {
+    console.log('Parsed character data:', charData)
+
+    // SillyTavern V2 格式
+    if (charData.spec === 'chara_card_v2' && charData.data) {
+      const d = charData.data
+      // 处理 character_book (世界书) 中可能包含的 NPC 数据
+      let npcs = []
+      if (d.character_book && d.character_book.entries) {
+        // 尝试从 character_book 提取 NPC 信息
+        console.log('[PNG Import] Found character_book with', d.character_book.entries.length, 'entries')
+      }
+      return {
+        name: d.name || '',
+        bio: d.creator_notes || d.description?.slice(0, 200) || '',
+        persona: d.description || '',
+        greeting: d.first_mes || '',
+        npcs: npcs,
+      }
+    }
+
+    // 我们自己的导出格式（包含 name, persona, greeting, npcs 等）
+    if (charData.name && (charData.persona !== undefined || charData.greeting !== undefined)) {
+      return {
+        name: charData.name || '',
+        avatar: charData.avatar || '',
+        portrait: charData.portrait || '',
+        bio: charData.bio || '',
+        persona: charData.persona || '',
+        greeting: charData.greeting || '',
+        npcs: charData.npcs || [],
+      }
+    }
+
+    // SillyTavern V1 / 旧格式
+    return {
+      name: charData.name || charData.char_name || '',
+      bio: charData.creator_notes || charData.description?.slice(0, 200) || '',
+      persona: charData.description || charData.personality || '',
+      greeting: charData.first_mes || charData.greeting || '',
+      npcs: [],
+    }
+  }
+
   // 遍历 chunks 查找 tEXt 或 iTXt
   let offset = 8
   while (offset < bytes.length) {
@@ -387,58 +416,66 @@ async function extractPngMetadata(arrayBuffer) {
     if (type === 'tEXt') {
       const data = bytes.slice(offset + 8, offset + 8 + length)
       const nullIndex = data.indexOf(0)
-      const keyword = uint8ArrayToString(data.slice(0, nullIndex))
+      const keyword = uint8ArrayToUtf8String(data.slice(0, nullIndex))
 
-      console.log('Found tEXt chunk with keyword:', keyword)
+      console.log('[PNG Import] Found tEXt chunk with keyword:', keyword, 'data length:', data.length - nullIndex - 1)
 
       if (keyword === 'chara') {
         const textBytes = data.slice(nullIndex + 1)
+        // base64 是纯 ASCII，用逐字节转换
         const textData = uint8ArrayToString(textBytes)
+        console.log('[PNG Import] Base64 data length:', textData.length)
 
         try {
-          // SillyTavern 使用 base64 编码的 JSON
-          const decoded = atob(textData)
-          // 使用 TextDecoder 处理 UTF-8
-          const jsonBytes = new Uint8Array(decoded.split('').map(c => c.charCodeAt(0)))
-          const jsonStr = new TextDecoder('utf-8').decode(jsonBytes)
-          const charData = JSON.parse(jsonStr)
-
-          console.log('Parsed character data:', charData)
-
-          // SillyTavern V2 格式
-          if (charData.spec === 'chara_card_v2' && charData.data) {
-            const d = charData.data
-            return {
-              name: d.name || '',
-              bio: d.creator_notes || d.description?.slice(0, 200) || '',
-              persona: d.description || '',
-              greeting: d.first_mes || '',
-            }
-          }
-
-          // 我们自己的导出格式（包含 name, persona, greeting 等）
-          if (charData.name && (charData.persona !== undefined || charData.greeting !== undefined)) {
-            return {
-              name: charData.name || '',
-              avatar: charData.avatar || '',
-              portrait: charData.portrait || '',
-              bio: charData.bio || '',
-              persona: charData.persona || '',
-              greeting: charData.greeting || '',
-              npcs: charData.npcs || [],
-            }
-          }
-
-          // SillyTavern V1 / 旧格式
-          return {
-            name: charData.name || charData.char_name || '',
-            bio: charData.creator_notes || charData.description?.slice(0, 200) || '',
-            persona: charData.description || charData.personality || '',
-            greeting: charData.first_mes || charData.greeting || '',
-            npcs: [],
-          }
+          const charData = parseCharaData(textData)
+          return convertCharData(charData)
         } catch (e) {
-          console.error('解析 chara 数据失败:', e)
+          console.error('[PNG Import] 解析 tEXt chara 数据失败:', e)
+          throw new Error('角色卡数据解析失败: ' + e.message)
+        }
+      }
+    }
+
+    // 处理 iTXt chunk（国际化文本，SillyTavern 也可能使用这种格式）
+    if (type === 'iTXt') {
+      const data = bytes.slice(offset + 8, offset + 8 + length)
+      // iTXt 格式: keyword(null)compression_flag(1)compression_method(1)language_tag(null)translated_keyword(null)text
+      const nullIndex = data.indexOf(0)
+      const keyword = uint8ArrayToUtf8String(data.slice(0, nullIndex))
+
+      console.log('[PNG Import] Found iTXt chunk with keyword:', keyword)
+
+      if (keyword === 'chara') {
+        // 跳过 keyword + null + compression_flag + compression_method
+        let pos = nullIndex + 1
+        const compressionFlag = data[pos]
+        pos += 2 // skip compression_flag and compression_method
+
+        // 跳过 language_tag (到下一个 null)
+        while (pos < data.length && data[pos] !== 0) pos++
+        pos++ // skip null
+
+        // 跳过 translated_keyword (到下一个 null)
+        while (pos < data.length && data[pos] !== 0) pos++
+        pos++ // skip null
+
+        const textBytes = data.slice(pos)
+        console.log('[PNG Import] iTXt text data length:', textBytes.length, 'compression:', compressionFlag)
+
+        let textData
+        if (compressionFlag === 1) {
+          // 数据被压缩，使用 pako 解压（如果需要的话）
+          console.warn('[PNG Import] Compressed iTXt not fully supported')
+          textData = uint8ArrayToString(textBytes)
+        } else {
+          textData = uint8ArrayToString(textBytes)
+        }
+
+        try {
+          const charData = parseCharaData(textData)
+          return convertCharData(charData)
+        } catch (e) {
+          console.error('[PNG Import] 解析 iTXt chara 数据失败:', e)
           throw new Error('角色卡数据解析失败: ' + e.message)
         }
       }
