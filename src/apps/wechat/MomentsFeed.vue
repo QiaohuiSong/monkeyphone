@@ -415,89 +415,92 @@ function formatTime(timestamp) {
       </div>
     </div>
 
-    <!-- 封面区域 -->
-    <div class="cover-section">
-      <div
-        class="cover-image"
-        :style="currentProfile.coverImage ? { backgroundImage: `url(${currentProfile.coverImage})` } : {}"
-        @click="triggerCoverUpload"
-      >
-        <div v-if="!currentProfile.coverImage" class="cover-placeholder">
-          <Camera :size="24" />
-          <span>点击设置封面</span>
-        </div>
-        <div v-else class="cover-edit-hint">
-          <Camera :size="16" />
-          <span>更换封面</span>
-        </div>
-      </div>
-
-      <!-- 用户头像 -->
-      <div class="profile-float">
-        <span class="nickname">{{ currentProfile.nickname }}</span>
-        <div class="avatar" @click.stop="triggerAvatarUpload">
-          <img v-if="currentProfile.avatar" :src="currentProfile.avatar" />
-          <span v-else>{{ currentProfile.nickname?.[0] || '我' }}</span>
-          <div class="avatar-edit-hint">
-            <Camera :size="12" />
+    <!-- 可滚动内容区域 -->
+    <div class="scroll-content">
+      <!-- 封面区域 -->
+      <div class="cover-section">
+        <div
+          class="cover-image"
+          :style="currentProfile.coverImage ? { backgroundImage: `url(${currentProfile.coverImage})` } : {}"
+          @click="triggerCoverUpload"
+        >
+          <div v-if="!currentProfile.coverImage" class="cover-placeholder">
+            <Camera :size="24" />
+            <span>点击设置封面</span>
+          </div>
+          <div v-else class="cover-edit-hint">
+            <Camera :size="16" />
+            <span>更换封面</span>
           </div>
         </div>
-      </div>
 
-      <input ref="coverInput" type="file" accept="image/*" style="display: none" @change="handleCoverChange" />
-      <input ref="avatarInput" type="file" accept="image/*" style="display: none" @change="handleAvatarChange" />
-    </div>
-
-    <!-- 动态列表 -->
-    <div class="moments-list">
-      <div v-if="loading" class="loading">加载中...</div>
-      <div v-else-if="combinedMoments.length === 0" class="empty">暂无朋友圈动态</div>
-
-      <div v-else v-for="moment in combinedMoments" :key="moment.id" class="moment-item">
-        <div class="moment-avatar" :class="{ clickable: !moment.isPlayer }" @click="!moment.isPlayer && openAuthorProfile(moment.charId)">
-          <img v-if="moment.authorAvatar" :src="moment.authorAvatar" />
-          <span v-else>{{ moment.authorName?.[0] || '?' }}</span>
-        </div>
-
-        <div class="moment-content">
-          <div class="moment-author" :class="{ clickable: !moment.isPlayer, 'is-player': moment.isPlayer }" @click="!moment.isPlayer && openAuthorProfile(moment.charId)">
-            {{ moment.authorName }}
-            <span v-if="moment.isPlayer" class="player-badge">我</span>
-          </div>
-
-          <div v-if="moment.content" class="moment-text">{{ moment.content }}</div>
-
-          <div v-if="moment.images?.length" class="moment-images" :class="`grid-${Math.min(moment.images.length, 3)}`">
-            <img v-for="(img, idx) in moment.images" :key="idx" :src="img" class="moment-img" />
-          </div>
-
-          <div v-if="moment.location" class="moment-location">📍 {{ moment.location }}</div>
-
-          <div class="moment-footer">
-            <span class="moment-time">{{ formatTime(moment.createdAt) }}</span>
-            <div class="moment-actions">
-              <button class="action-btn" :class="{ liked: isLiked(moment) }" @click="toggleLike(moment)">
-                <Heart :size="16" :fill="isLiked(moment) ? '#e53935' : 'none'" />
-                <span v-if="moment.likes?.length">{{ moment.likes.length }}</span>
-              </button>
-              <button class="action-btn">
-                <MessageCircle :size="16" />
-                <span v-if="moment.comments?.length">{{ moment.comments.length }}</span>
-              </button>
-              <button v-if="moment.isPlayer" class="action-btn delete" @click="deletePlayerMoment(moment.id)">删除</button>
+        <!-- 用户头像 -->
+        <div class="profile-float">
+          <span class="nickname">{{ currentProfile.nickname }}</span>
+          <div class="avatar" @click.stop="triggerAvatarUpload">
+            <img v-if="currentProfile.avatar" :src="currentProfile.avatar" />
+            <span v-else>{{ currentProfile.nickname?.[0] || '我' }}</span>
+            <div class="avatar-edit-hint">
+              <Camera :size="12" />
             </div>
           </div>
+        </div>
 
-          <!-- 互动区域 -->
-          <div v-if="moment.likes?.length || moment.comments?.length" class="interaction-section">
-            <div v-if="moment.likes?.length" class="likes-row">
-              <Heart :size="14" fill="#e53935" />
-              <span>{{ getLikeNames(moment) }}</span>
+        <input ref="coverInput" type="file" accept="image/*" style="display: none" @change="handleCoverChange" />
+        <input ref="avatarInput" type="file" accept="image/*" style="display: none" @change="handleAvatarChange" />
+      </div>
+
+      <!-- 动态列表 -->
+      <div class="moments-list">
+        <div v-if="loading" class="loading">加载中...</div>
+        <div v-else-if="combinedMoments.length === 0" class="empty">暂无朋友圈动态</div>
+
+        <div v-else v-for="moment in combinedMoments" :key="moment.id" class="moment-item">
+          <div class="moment-avatar" :class="{ clickable: !moment.isPlayer }" @click="!moment.isPlayer && openAuthorProfile(moment.charId)">
+            <img v-if="moment.authorAvatar" :src="moment.authorAvatar" />
+            <span v-else>{{ moment.authorName?.[0] || '?' }}</span>
+          </div>
+
+          <div class="moment-content">
+            <div class="moment-author" :class="{ clickable: !moment.isPlayer, 'is-player': moment.isPlayer }" @click="!moment.isPlayer && openAuthorProfile(moment.charId)">
+              {{ moment.authorName }}
+              <span v-if="moment.isPlayer" class="player-badge">我</span>
             </div>
-            <div v-if="moment.comments?.length" class="comments-list">
-              <div v-for="comment in moment.comments" :key="comment.id" class="comment-item">
-                <span class="comment-author">{{ comment.authorName }}:</span>
-                <span class="comment-text">{{ comment.content }}</span>
+
+            <div v-if="moment.content" class="moment-text">{{ moment.content }}</div>
+
+            <div v-if="moment.images?.length" class="moment-images" :class="`grid-${Math.min(moment.images.length, 3)}`">
+              <img v-for="(img, idx) in moment.images" :key="idx" :src="img" class="moment-img" />
+            </div>
+
+            <div v-if="moment.location" class="moment-location">📍 {{ moment.location }}</div>
+
+            <div class="moment-footer">
+              <span class="moment-time">{{ formatTime(moment.createdAt) }}</span>
+              <div class="moment-actions">
+                <button class="action-btn" :class="{ liked: isLiked(moment) }" @click="toggleLike(moment)">
+                  <Heart :size="16" :fill="isLiked(moment) ? '#e53935' : 'none'" />
+                  <span v-if="moment.likes?.length">{{ moment.likes.length }}</span>
+                </button>
+                <button class="action-btn">
+                  <MessageCircle :size="16" />
+                  <span v-if="moment.comments?.length">{{ moment.comments.length }}</span>
+                </button>
+                <button v-if="moment.isPlayer" class="action-btn delete" @click="deletePlayerMoment(moment.id)">删除</button>
+              </div>
+            </div>
+
+            <!-- 互动区域 -->
+            <div v-if="moment.likes?.length || moment.comments?.length" class="interaction-section">
+              <div v-if="moment.likes?.length" class="likes-row">
+                <Heart :size="14" fill="#e53935" />
+                <span>{{ getLikeNames(moment) }}</span>
+              </div>
+              <div v-if="moment.comments?.length" class="comments-list">
+                <div v-for="comment in moment.comments" :key="comment.id" class="comment-item">
+                  <span class="comment-author">{{ comment.userName || comment.authorName }}:</span>
+                  <span class="comment-text">{{ comment.content }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -526,7 +529,6 @@ function formatTime(timestamp) {
   display: flex;
   flex-direction: column;
   background: #ededed;
-  overflow-y: auto;
 }
 
 .header {
@@ -536,8 +538,7 @@ function formatTime(timestamp) {
   padding: 10px 12px;
   background: #ededed;
   border-bottom: 1px solid #d9d9d9;
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 100;
 }
 
@@ -574,6 +575,7 @@ function formatTime(timestamp) {
   background: #fff;
   border-bottom: 1px solid #d9d9d9;
   padding: 12px;
+  flex-shrink: 0;
 }
 
 .persona-selector-title {
@@ -651,10 +653,16 @@ function formatTime(timestamp) {
   padding: 12px;
 }
 
+/* 可滚动内容区域 */
+.scroll-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
 /* 封面区域 */
 .cover-section {
   position: relative;
-  flex-shrink: 0;
+  margin-bottom: 40px;
 }
 
 .cover-image {
@@ -746,7 +754,7 @@ function formatTime(timestamp) {
 
 /* 动态列表 */
 .moments-list {
-  padding-top: 50px;
+  background: #fff;
 }
 
 .loading, .empty {
