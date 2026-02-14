@@ -108,8 +108,8 @@ async function confirmDeleteChat() {
   isDeleting.value = true
   try {
     await clearChatSession(props.charId, 'player')
-    // 清空本地缓存（响应式更新，无需刷新页面）
-    chatStore.clearCache(props.charId)
+    // 清空本地缓存（传递 sessionId 以匹配新的缓存 key 格式）
+    chatStore.clearCache(props.charId, 'player')
     closeDeleteConfirm()
     alert('聊天记录已清空')
   } catch (e) {

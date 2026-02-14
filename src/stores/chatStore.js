@@ -393,10 +393,29 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // 清空角色聊天缓存
-  function clearCache(charId) {
+  // 支持 charId（清空该角色所有会话）或 charId + sessionId（清空特定会话）
+  function clearCache(charId, sessionId = null) {
     if (charId) {
-      delete conversations[charId]
-      delete paginationInfo[charId]
+      if (sessionId) {
+        // 清空特定会话
+        const cacheKey = getCacheKey(charId, sessionId)
+        delete conversations[cacheKey]
+        delete paginationInfo[cacheKey]
+      } else {
+        // 清空该角色的所有会话（遍历所有以 charId: 开头的 key）
+        const prefix = `${charId}:`
+        Object.keys(conversations).forEach(key => {
+          if (key === charId || key.startsWith(prefix)) {
+            delete conversations[key]
+          }
+        })
+        Object.keys(paginationInfo).forEach(key => {
+          if (key === charId || key.startsWith(prefix)) {
+            delete paginationInfo[key]
+          }
+        })
+      }
+      // 清空未读数（未读数仍以 charId 为 key）
       delete unreadCounts[charId]
     } else {
       // 清空所有
