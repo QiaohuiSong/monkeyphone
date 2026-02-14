@@ -91,10 +91,32 @@ echo ""
 
 echo "[构建前端]"
 
-# 检查是否需要重新构建（检查 dist/index.html 是否存在）
+# 检查是否需要重新构建
+# 比较 src 目录最新修改时间和 dist 目录
+NEED_BUILD=false
+
 if [ ! -f "$SCRIPT_DIR/dist/index.html" ]; then
+    NEED_BUILD=true
+    echo "📦 dist 目录不存在，需要构建..."
+else
+    # 获取 src 目录最新修改时间
+    SRC_TIME=$(find "$SCRIPT_DIR/src" -type f -name "*.vue" -o -name "*.js" -o -name "*.ts" -o -name "*.css" 2>/dev/null | xargs stat -c %Y 2>/dev/null | sort -n | tail -1)
+    # 获取 dist/index.html 的修改时间
+    DIST_TIME=$(stat -c %Y "$SCRIPT_DIR/dist/index.html" 2>/dev/null)
+
+    if [ -n "$SRC_TIME" ] && [ -n "$DIST_TIME" ]; then
+        if [ "$SRC_TIME" -gt "$DIST_TIME" ]; then
+            NEED_BUILD=true
+            echo "📦 检测到源码更新，需要重新构建..."
+        fi
+    fi
+fi
+
+if [ "$NEED_BUILD" = true ]; then
     echo "📦 构建前端..."
     cd "$SCRIPT_DIR"
+    # 先删除旧的 dist 目录
+    rm -rf "$SCRIPT_DIR/dist"
     npm run build
     if [ $? -ne 0 ]; then
         echo "❌ 前端构建失败"
@@ -102,7 +124,7 @@ if [ ! -f "$SCRIPT_DIR/dist/index.html" ]; then
     fi
     echo "✅ 前端构建完成"
 else
-    echo "✅ 前端已构建（如需重新构建请先删除 dist 目录）"
+    echo "✅ 前端已是最新（如需强制重新构建请先删除 dist 目录）"
 fi
 
 echo ""
