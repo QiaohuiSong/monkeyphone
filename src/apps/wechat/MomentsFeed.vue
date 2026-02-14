@@ -657,12 +657,14 @@ function formatTime(timestamp) {
 .scroll-content {
   flex: 1;
   overflow-y: auto;
+  background: #fff;
 }
 
 /* 封面区域 */
 .cover-section {
   position: relative;
   margin-bottom: 40px;
+  background: #fff;
 }
 
 .cover-image {
