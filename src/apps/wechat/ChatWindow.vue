@@ -43,7 +43,7 @@ function isOwnMessage(msg) {
 const emit = defineEmits(['back', 'openProfile'])
 
 // 从 Store 获取消息（响应式）
-const messages = computed(() => chatStore.getMessages(props.charId))
+const messages = computed(() => chatStore.getMessages(props.charId, props.sessionId))
 
 const inputText = ref('')
 const isTyping = computed(() => chatStore.isPending(props.charId))
@@ -55,7 +55,7 @@ const character = ref(null)
 const boundPersona = ref(null) // 绑定的人设
 
 // 分页相关（从 Store 获取）
-const hasMoreMessages = computed(() => chatStore.paginationInfo[props.charId]?.hasMore || false)
+const hasMoreMessages = computed(() => chatStore.getPaginationInfo(props.charId, props.sessionId).hasMore)
 const isLoadingMore = ref(false)
 
 // 表情面板状态
@@ -367,7 +367,7 @@ async function sendGreeting(greetingText) {
         'character',
         profile.value?.nickname || character.value?.name
       )
-      chatStore.addMessageToCache(props.charId, msg)
+      chatStore.addMessageToCache(props.charId, msg, props.sessionId)
     }
     scrollToBottom()
   } catch (e) {
@@ -525,7 +525,8 @@ async function deleteMessage() {
     await deleteChatMessage(props.charId, props.sessionId, msg.id)
 
     // 从本地缓存中移除
-    const msgs = chatStore.conversations[props.charId]
+    const cacheKey = `${props.charId}:${props.sessionId}`
+    const msgs = chatStore.conversations[cacheKey]
     if (msgs) {
       const index = msgs.findIndex(m => m.id === msg.id)
       if (index !== -1) {
@@ -671,7 +672,7 @@ async function sendTransfer() {
         }
       }
     )
-    chatStore.addMessageToCache(props.charId, msg)
+    chatStore.addMessageToCache(props.charId, msg, props.sessionId)
     scrollToBottom()
     closeTransferModal()
   } catch (e) {
@@ -708,7 +709,7 @@ async function handleOpenRedPacket(msg) {
   // 更新 Store 中的消息
   chatStore.updateMessageInCache(props.charId, msg.id, {
     redpacketData: msg.redpacketData
-  })
+  }, props.sessionId)
 
   // 更新后端
   try {
@@ -779,7 +780,7 @@ async function sendSticker(sticker) {
     // 标记为贴纸类型
     msg.type = 'sticker'
     msg.stickerUrl = sticker.url
-    chatStore.addMessageToCache(props.charId, msg)
+    chatStore.addMessageToCache(props.charId, msg, props.sessionId)
     scrollToBottom()
   } catch (e) {
     console.error('发送表情失败:', e)
