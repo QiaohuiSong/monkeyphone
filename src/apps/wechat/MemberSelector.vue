@@ -4,7 +4,8 @@ import { Plus, Check, X, Upload, Users } from 'lucide-vue-next'
 import {
   getMyCharacters,
   getCustomNpcs,
-  createCustomNpc
+  createCustomNpc,
+  getCharacterForChat
 } from '../../services/api.js'
 
 const props = defineProps({
@@ -64,7 +65,18 @@ async function loadData() {
     // 只从当前角色卡中提取 NPC 关系组
     const npcs = []
     if (props.ownerCharId) {
-      const ownerChar = chars.find(c => c.id === props.ownerCharId)
+      // 先从自己的角色列表中查找
+      let ownerChar = chars.find(c => c.id === props.ownerCharId)
+
+      // 如果找不到（可能是广场角色），则单独获取角色数据
+      if (!ownerChar) {
+        try {
+          ownerChar = await getCharacterForChat(props.ownerCharId)
+        } catch (e) {
+          console.warn('获取角色数据失败:', e)
+        }
+      }
+
       if (ownerChar && ownerChar.npcs && Array.isArray(ownerChar.npcs)) {
         for (const npc of ownerChar.npcs) {
           npcs.push({
