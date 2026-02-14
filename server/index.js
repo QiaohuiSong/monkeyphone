@@ -1218,17 +1218,31 @@ app.get('/api/plaza/characters/:id/chat', authMiddleware, (req, res) => {
     return res.status(404).json({ error: '角色不存在' })
   }
 
-  // 返回聊天所需的数据
+  // 返回聊天所需的数据（包含 NPC 列表用于群聊）
+  const responseData = {
+    id: character.id,
+    name: character.name,
+    avatar: character.avatar,
+    portrait: character.portrait,
+    persona: character.persona,
+    greeting: character.greeting
+  }
+
+  // 如果角色有 NPC 关系组，也返回
+  if (character.npcs && Array.isArray(character.npcs)) {
+    responseData.npcs = character.npcs.map(npc => ({
+      id: npc.id,
+      name: npc.name,
+      avatar: npc.avatar,
+      relation: npc.relation,
+      bio: npc.bio,
+      persona: npc.persona
+    }))
+  }
+
   res.json({
     success: true,
-    data: {
-      id: character.id,
-      name: character.name,
-      avatar: character.avatar,
-      portrait: character.portrait,
-      persona: character.persona,
-      greeting: character.greeting
-    }
+    data: responseData
   })
 })
 
