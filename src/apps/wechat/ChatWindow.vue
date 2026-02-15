@@ -407,26 +407,19 @@ async function sendOnly() {
   }
 }
 
-// 发送并触发AI回复（使用 Store 后台处理）
+// 发送并触发AI回复（带拟人化延迟）
 async function sendAndAI() {
-  if (!inputText.value.trim() || isTyping.value || props.readOnly) return
-
   const text = inputText.value.trim()
-  inputText.value = ''
+  if (!text || isTyping.value || props.readOnly) return
 
-  try {
-    // 使用 Store 的后台发送功能
-    chatStore.sendMessageBackground(props.charId, text, props.sessionId, {
-      profile: profile.value,
-      character: character.value,
-      onTypingStart: () => scrollToBottom(),
-      onTypingEnd: () => scrollToBottom(),
-      onMessageReceived: () => scrollToBottom()
-    })
-    scrollToBottom()
-  } catch (e) {
-    console.error('发送失败:', e)
-  }
+  inputText.value = ''
+  scrollToBottom()
+
+  await chatStore.sendMessageBackground(props.charId, text, props.sessionId, {
+    onTypingStart: () => scrollToBottom(),
+    onTypingEnd: () => scrollToBottom(),
+    onBubbleAdded: () => scrollToBottom() // 每个气泡添加后滚动
+  })
 }
 
 // 注：AI 回复解析和消息队列发送已移至 chatStore

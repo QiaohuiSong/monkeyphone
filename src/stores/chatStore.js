@@ -67,7 +67,103 @@ export const useChatStore = defineStore('chat', () => {
     return `${charId}:${sessionId}`
   }
 
+  // ==================== 工具函数 ====================
+
+  // 延迟函数
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+  // 根据文本长度计算延迟时间
+  function calculateDelay(text, isFirst = false) {
+    if (isFirst) return 600 // 第一条快一点
+    // 基础 500ms + 每字 50ms，上限 2500ms
+    return Math.min(text.length * 50 + 500, 2500)
+  }
+
   // ==================== Actions ====================
+
+  // 核心：发送消息并获取 AI 回复（Fetch-then-Render 模式）
+  async function sendMessageBackground(charId, text, sessionId = 'player', options = {}) {
+    const { onTypingStart, onTypingEnd, onBubbleAdded } = options
+    const cacheKey = getCacheKey(charId, sessionId)
+
+    // === 第一阶段：准备 ===
+    if (!conversations[cacheKey]) {
+      conversations[cacheKey] = []
+    }
+    // 立即显示用户消息
+    conversations[cacheKey].push({
+      id: Date.now(),
+      sender: 'player',
+      text,
+      timestamp: new Date().toISOString()
+    })
+
+    // 锁定状态
+    pendingRequests.value.add(charId)
+    sendingQueue[charId] = true
+    onTypingStart?.()
+
+    try {
+      // === 第二阶段：网络请求（只执行一次！）===
+      console.log('[sendMessageBackground] 发送 API 请求...')
+      const result = await sendAIMessage(charId, text)
+      console.log('[sendMessageBackground] API 响应:', result)
+
+      // === 第三阶段：解析 ===
+      let bubbles = []
+      if (Array.isArray(result)) {
+        // 保留完整消息对象（包含 type, redpacketData 等）
+        bubbles = result.filter(m => m && (typeof m === 'string' ? m.trim() : m.text?.trim()))
+      } else if (result?.text) {
+        bubbles = [result]
+      } else if (typeof result === 'string') {
+        bubbles = [result]
+      }
+      console.log('[sendMessageBackground] 解析出气泡:', bubbles.length, '条')
+
+      // === 第四阶段：渲染循环（无网络请求！）===
+      for (const [index, msg] of bubbles.entries()) {
+        const bubbleText = typeof msg === 'string' ? msg : msg.text
+        if (!bubbleText?.trim()) continue
+
+        // 计算延迟
+        const delay = index === 0 ? 600 : Math.min(bubbleText.length * 50 + 400, 2000)
+        await wait(delay)
+
+        // 显示气泡（纯本地操作，保留完整消息结构）
+        if (typeof msg === 'object') {
+          // 完整消息对象（可能包含 type, redpacketData 等）
+          conversations[cacheKey].push({
+            ...msg,
+            id: msg.id || Date.now() + index
+          })
+        } else {
+          // 纯文本
+          conversations[cacheKey].push({
+            id: Date.now() + index,
+            sender: 'character',
+            text: bubbleText,
+            timestamp: new Date().toISOString()
+          })
+        }
+        onBubbleAdded?.()
+      }
+
+    } catch (e) {
+      console.error('[sendMessageBackground] 错误:', e)
+      conversations[cacheKey].push({
+        id: Date.now(),
+        sender: 'system',
+        text: `错误: ${e.message}`,
+        timestamp: new Date().toISOString()
+      })
+    } finally {
+      // === 第五阶段：收尾 ===
+      pendingRequests.value.delete(charId)
+      sendingQueue[charId] = false
+      onTypingEnd?.()
+    }
+  }
 
   // 进入聊天窗口
   function enterChat(charId) {
@@ -155,138 +251,6 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       console.error('发送消息失败:', e)
       throw e
-    }
-  }
-
-  // 核心：后台发送消息并获取 AI 回复
-  async function sendMessageBackground(charId, text, sessionId = 'player', options = {}) {
-    const { profile, character, onTypingStart, onTypingEnd, onMessageReceived } = options
-    const cacheKey = getCacheKey(charId, sessionId)
-
-    // Step 1: 立即发送用户消息
-    try {
-      const userMsg = await sendChatMessage(charId, text, sessionId, 'player')
-      const normalizedUserMsg = normalizeMessage(userMsg)
-
-      if (!conversations[cacheKey]) {
-        conversations[cacheKey] = []
-      }
-      conversations[cacheKey].push(normalizedUserMsg)
-    } catch (e) {
-      console.error('发送用户消息失败:', e)
-      throw e
-    }
-
-    // Step 2: 标记为等待回复
-    pendingRequests.value.add(charId)
-    sendingQueue[charId] = true
-    onTypingStart?.()
-
-    // Step 3: 异步调用 AI API（不会被组件卸载打断）
-    const aiPromise = (async () => {
-      try {
-        // 构建上下文
-        const recentMessages = (conversations[cacheKey] || []).slice(-20)
-        const context = recentMessages
-          .filter(m => m.sender === 'player' || m.sender === 'character')
-          .map(m => m.text)
-          .join('\n')
-
-        const aiReply = await sendAIMessage(charId, context)
-
-        // Step 4: 处理 AI 回复
-        const { textParts, redpackets } = parseAIResponse(aiReply.text)
-
-        // 处理文本消息队列
-        if (textParts.length > 0) {
-          const finalQueue = processAIResponse(textParts.join(' '))
-          await sendMessageQueueBackground(charId, finalQueue, sessionId, profile, character)
-        }
-
-        // 处理红包
-        for (const rp of redpackets) {
-          await sendRedPacketFromAI(charId, rp.amount, rp.note, sessionId, profile, character)
-        }
-
-        // 处理待收款转账
-        await processPendingTransfers(charId, sessionId, profile, character)
-
-        // 通知：如果用户不在当前聊天窗口
-        if (activeCharId.value !== charId) {
-          // 增加未读数
-          if (!unreadCounts[charId]) {
-            unreadCounts[charId] = 0
-          }
-          unreadCounts[charId]++
-
-          // 播放提示音（静音处理）
-          try {
-            notificationSound.volume = 0.3
-            notificationSound.play().catch(() => {})
-          } catch (e) {}
-        }
-
-        onMessageReceived?.()
-
-      } catch (e) {
-        console.error('AI 回复失败:', e)
-        // 添加错误消息
-        if (!conversations[cacheKey]) {
-          conversations[cacheKey] = []
-        }
-        conversations[cacheKey].push({
-          id: Date.now(),
-          sender: 'system',
-          text: `AI 回复失败: ${e.message}`,
-          timestamp: new Date().toISOString()
-        })
-      } finally {
-        // 清理状态
-        pendingRequests.value.delete(charId)
-        sendingQueue[charId] = false
-        onTypingEnd?.()
-      }
-    })()
-
-    // 返回 Promise 但不阻塞（让调用者可以选择等待或不等待）
-    return aiPromise
-  }
-
-  // 消息队列发送（模拟打字延迟）
-  async function sendMessageQueueBackground(charId, textArray, sessionId, profile, character) {
-    if (textArray.length === 0) return
-    const cacheKey = getCacheKey(charId, sessionId)
-
-    for (let i = 0; i < textArray.length; i++) {
-      const text = textArray[i]
-      const isPunctuation = /^[。！？.!?]+$/.test(text)
-
-      // 延迟策略
-      let delay = 0
-      if (i > 0) {
-        if (isPunctuation) {
-          delay = 200 + Math.random() * 200
-        } else {
-          delay = Math.min(2500, Math.max(600, text.length * 60))
-        }
-      }
-
-      if (delay > 0) {
-        await new Promise(resolve => setTimeout(resolve, delay))
-      }
-
-      try {
-        const senderName = profile?.nickname || character?.name
-        const aiMsg = await sendChatMessage(charId, text, sessionId, 'character', senderName)
-        const normalizedMsg = normalizeMessage(aiMsg)
-
-        if (!conversations[cacheKey]) {
-          conversations[cacheKey] = []
-        }
-        conversations[cacheKey].push(normalizedMsg)
-      } catch (e) {
-        console.error('保存消息失败:', e)
-      }
     }
   }
 
@@ -479,61 +443,6 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     return msg
-  }
-
-  // 解析 AI 回复，提取红包标签
-  function parseAIResponse(fullText) {
-    const redpackets = []
-    const redpacketRegex = /<redpacket\s+amount="([^"]+)"\s+note="([^"]*)"[^>]*>([^<]*)<\/redpacket>/gi
-
-    let match
-    while ((match = redpacketRegex.exec(fullText)) !== null) {
-      redpackets.push({
-        amount: match[1],
-        note: match[2] || '恭喜发财，大吉大利'
-      })
-    }
-
-    const textWithoutRedpackets = fullText.replace(redpacketRegex, '').trim()
-    const textParts = textWithoutRedpackets.split(/\s+/).filter(s => s.length > 0)
-
-    return {
-      textParts: textParts.length > 0 ? [textWithoutRedpackets] : [],
-      redpackets
-    }
-  }
-
-  // 处理 AI 回复分割
-  function processAIResponse(fullText) {
-    const segments = fullText.split('###')
-    const finalQueue = []
-
-    segments.forEach(seg => {
-      const trimmed = seg.trim()
-      if (!trimmed) return
-
-      const parts = trimmed.split(/([。！？.!?]+)/).filter(s => s.length > 0)
-
-      let i = 0
-      while (i < parts.length) {
-        const current = parts[i]
-        const next = parts[i + 1]
-        const isPunctuation = /^[。！？.!?]+$/.test(current)
-
-        if (isPunctuation) {
-          finalQueue.push(current)
-          i++
-        } else if (next && /^[。！？.!?]+$/.test(next)) {
-          finalQueue.push(current + next)
-          i += 2
-        } else {
-          finalQueue.push(current)
-          i++
-        }
-      }
-    })
-
-    return finalQueue.filter(s => s.trim().length > 0)
   }
 
   return {

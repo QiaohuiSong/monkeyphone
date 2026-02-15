@@ -703,6 +703,46 @@ router.delete('/:charId/chats/:sessionId/message/:messageId', authMiddleware, as
   }
 })
 
+// 批量保存消息（单次请求，聚合保存）
+router.post('/:charId/batch-save', authMiddleware, async (req, res) => {
+  try {
+    const { charId } = req.params
+    const username = req.user.username
+    const { sessionId = 'player', messages } = req.body
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: '消息列表不能为空' })
+    }
+
+    const { chatsDir } = await ensureWechatStructure(username, charId)
+    const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
+
+    // 为每条消息添加唯一 ID 和时间戳
+    const baseTime = Date.now()
+    const savedMessages = messages.map((msg, index) => ({
+      id: baseTime * 1000 + index, // 确保唯一性
+      sender: msg.sender || 'character',
+      senderName: msg.senderName,
+      text: msg.text,
+      timestamp: new Date(baseTime + index).toISOString(),
+      ...(msg.type && { type: msg.type }),
+      ...(msg.redpacketData && { redpacketData: msg.redpacketData }),
+      ...(msg.transferData && { transferData: msg.transferData }),
+      ...(msg.stickerUrl && { stickerUrl: msg.stickerUrl })
+    }))
+
+    await withLock(`chat:${username}:${charId}:${sessionId}`, async () => {
+      const content = savedMessages.map(m => JSON.stringify(m)).join('\n') + '\n'
+      await fs.appendFile(chatPath, content, 'utf-8')
+    })
+
+    res.json({ success: true, data: savedMessages })
+  } catch (error) {
+    console.error('批量保存消息失败:', error)
+    res.status(500).json({ error: '批量保存消息失败' })
+  }
+})
+
 // 清空聊天记录
 router.delete('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
   try {

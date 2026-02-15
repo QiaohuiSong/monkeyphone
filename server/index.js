@@ -1390,19 +1390,38 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     console.error('读取用户朋友圈失败:', e)
   }
 
-  // 保存用户消息
-  addCharacterChat(req.user.username, charId, {
-    sender: 'user',
-    text: message
-  })
+  // 获取历史消息构建上下文（从 wechat/chats/player.jsonl 读取）
+  let history = []
+  const playerChatPath = path.join(chatsDir, 'player.jsonl')
+  try {
+    await fs.ensureDir(chatsDir)
+    if (await fs.pathExists(playerChatPath)) {
+      const content = await fs.readFile(playerChatPath, 'utf-8')
+      const lines = content.split('\n').filter(line => line.trim())
+      const messages = lines.map(line => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return null
+        }
+      }).filter(m => m && !m.error)
 
-  // 获取历史消息构建上下文
-  const history = getCharacterChats(req.user.username, charId)
-    .filter(m => !m.error)
-    .map(m => ({
-      role: m.sender === 'user' ? 'user' : 'assistant',
-      content: m.text
-    }))
+      // 取最近 20 条消息
+      const recentMessages = messages.slice(-20)
+      history = recentMessages.map(m => ({
+        role: m.sender === 'user' || m.sender === 'player' ? 'user' : 'assistant',
+        content: m.text
+      }))
+    }
+  } catch (e) {
+    console.error('读取聊天历史失败:', e)
+  }
+
+  // 添加当前用户消息到历史（如果还没有）
+  const lastMsg = history[history.length - 1]
+  if (!lastMsg || lastMsg.content !== message || lastMsg.role !== 'user') {
+    history.push({ role: 'user', content: message })
+  }
 
   // 构建 profile 更新提示
   // 检测微信号是否是初始状态（空或以 wxid_ 开头的系统生成值）
@@ -2012,13 +2031,120 @@ ${jsonTaskPrompt}`
       console.error('处理AI响应副作用失败:', parseErr)
     }
 
-    const aiMessage = addCharacterChat(req.user.username, charId, {
+    // ========== 保存到 wechat/chats/player.jsonl（统一存储）==========
+    const playerChatPath = path.join(chatsDir, 'player.jsonl')
+    await fs.ensureDir(chatsDir)
+
+    // 1. 保存用户消息
+    const userMessage = {
+      id: Date.now(),
+      sender: 'player',
+      text: message,
+      timestamp: new Date().toISOString()
+    }
+    await fs.appendFile(playerChatPath, JSON.stringify(userMessage) + '\n', 'utf-8')
+
+    // 2. 解析红包标签
+    function parseRedpackets(text) {
+      const redpackets = []
+      const redpacketRegex = /<redpacket\s+amount="([^"]+)"\s+note="([^"]*)"[^>]*>([^<]*)<\/redpacket>/gi
+      let match
+      while ((match = redpacketRegex.exec(text)) !== null) {
+        redpackets.push({
+          amount: match[1],
+          note: match[2] || '恭喜发财，大吉大利'
+        })
+      }
+      // 移除红包标签后的文本
+      const textWithoutRedpackets = text.replace(redpacketRegex, '').trim()
+      return { textWithoutRedpackets, redpackets }
+    }
+
+    // 3. 分割 AI 回复（先按 ### 分隔，再按 。！？ 分隔成多个气泡）
+    function splitReplyIntoBubbles(fullText) {
+      const segments = fullText.split('###')
+      const bubbles = []
+
+      segments.forEach(seg => {
+        const trimmed = seg.trim()
+        if (!trimmed) return
+
+        // 按句末标点分割，但保留标点
+        const parts = trimmed.split(/([。！？!?]+)/).filter(s => s.length > 0)
+
+        let i = 0
+        while (i < parts.length) {
+          const current = parts[i]
+          const next = parts[i + 1]
+          const isPunctuation = /^[。！？!?]+$/.test(current)
+
+          if (isPunctuation) {
+            i++
+          } else if (next && /^[。！？!?]+$/.test(next)) {
+            bubbles.push(current + next)
+            i += 2
+          } else {
+            bubbles.push(current)
+            i++
+          }
+        }
+      })
+
+      return bubbles.filter(s => s.trim().length > 0)
+    }
+
+    // 先提取红包
+    const { textWithoutRedpackets, redpackets } = parseRedpackets(reply)
+
+    // 分割文本气泡
+    const replyBubbles = splitReplyIntoBubbles(textWithoutRedpackets)
+
+    // 4. 构建所有消息（文本 + 红包）
+    const baseTime = Date.now() + 1
+    const aiMessages = []
+
+    // 添加文本消息
+    replyBubbles.forEach((text, index) => {
+      aiMessages.push({
+        id: baseTime + index,
+        sender: 'character',
+        senderName: wechatProfile?.nickname || character.name,
+        text,
+        timestamp: new Date(baseTime + index).toISOString()
+      })
+    })
+
+    // 添加红包消息
+    redpackets.forEach((rp, index) => {
+      aiMessages.push({
+        id: baseTime + replyBubbles.length + index,
+        sender: 'character',
+        senderName: wechatProfile?.nickname || character.name,
+        text: `[红包] ${rp.note}`,
+        type: 'redpacket',
+        redpacketData: {
+          amount: parseFloat(rp.amount).toFixed(2),
+          note: rp.note,
+          status: 'unclaimed'
+        },
+        timestamp: new Date(baseTime + replyBubbles.length + index).toISOString()
+      })
+    })
+
+    // 5. 批量写入所有消息
+    if (aiMessages.length > 0) {
+      const aiContent = aiMessages.map(m => JSON.stringify(m)).join('\n') + '\n'
+      await fs.appendFile(playerChatPath, aiContent, 'utf-8')
+    }
+
+    // 同时保存到记忆系统（保留原有逻辑）
+    addCharacterChat(req.user.username, charId, {
       sender: 'ai',
       text: reply
     })
 
-    // 立即返回响应给前端，不阻塞用户
-    res.json({ success: true, data: aiMessage })
+    // 返回所有 AI 消息给前端（数组格式）
+    res.json({ success: true, data: aiMessages })
 
     // ========== 后台实时记忆更新（Fire-and-forget）==========
     // 响应已发送，以下操作在后台静默执行

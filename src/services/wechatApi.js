@@ -167,6 +167,15 @@ export async function sendAIMessage(charId, message) {
   return data.data
 }
 
+// 批量保存消息 (单次请求，聚合保存)
+export async function batchSaveMessages(charId, messages, sessionId = 'player') {
+  const data = await request(`/api/wechat/${charId}/batch-save`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId, messages })
+  })
+  return data.data
+}
+
 // ==================== 人设绑定 API ====================
 
 export async function bindPersona(charId, personaId) {
