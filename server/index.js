@@ -2146,12 +2146,10 @@ ${jsonTaskPrompt}`
     // 返回所有 AI 消息给前端（数组格式）
     res.json({ success: true, data: aiMessages })
 
-    // ========== 后台实时记忆更新（Fire-and-forget）==========
-    // 响应已发送，以下操作在后台静默执行
-    // 每回合都更新记忆，让 AI "过目不忘"
-    setImmediate(() => {
-      runRealtimeMemoryUpdate(req.user.username, charId, message, reply)
-    })
+    // ========== 后台实时记忆更新（暂时禁用，用于测试）==========
+    // setImmediate(() => {
+    //   runRealtimeMemoryUpdate(req.user.username, charId, message, reply)
+    // })
 
   } catch (error) {
     const errorMessage = addCharacterChat(req.user.username, charId, {
