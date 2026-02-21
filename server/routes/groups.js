@@ -55,6 +55,8 @@ function sanitizeAIResponse(text) {
   cleaned = cleaned.replace(/```thinking[\s\S]*?```/gi, '')
   cleaned = cleaned.replace(/```thought[\s\S]*?```/gi, '')
   cleaned = cleaned.replace(/```analysis[\s\S]*?```/gi, '')
+  cleaned = cleaned.replace(/```(?:markdown|md|text|plain)?\s*([\s\S]*?)\s*```/gi, '$1')
+  cleaned = cleaned.replace(/```+/g, '')
 
   // 4. 移除多余的空行（超过2个连续换行变成2个）
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n')

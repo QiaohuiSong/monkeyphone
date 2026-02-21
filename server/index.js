@@ -1,4 +1,4 @@
-import express from 'express'
+﻿import express from 'express'
 import cors from 'cors'
 import fs from 'fs-extra'
 import path from 'path'
@@ -17,7 +17,7 @@ import wechatRouter, { initWechatData } from './routes/wechat.js'
 import userRouter from './routes/user.js'
 import gamesRouter from './routes/games.js'
 import healthRouter from './routes/health.js'
-import bankRouter from './routes/bank.js'
+import bankRouter, { deductBalance } from './routes/bank.js'
 import groupsRouter from './routes/groups.js'
 
 // ==================== AI 输出清洗函数 ====================
@@ -70,6 +70,8 @@ function sanitizeAIResponse(text) {
   cleaned = cleaned.replace(/```thinking[\s\S]*?```/gi, '')
   cleaned = cleaned.replace(/```thought[\s\S]*?```/gi, '')
   cleaned = cleaned.replace(/```analysis[\s\S]*?```/gi, '')
+  cleaned = cleaned.replace(/```(?:markdown|md|text|plain)?\s*([\s\S]*?)\s*```/gi, '$1')
+  cleaned = cleaned.replace(/```+/g, '')
 
   // 4. 移除多余的空行（超过2个连续换行变成2个）
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
@@ -388,12 +390,41 @@ app.delete('/api/player/moments/:momentId', authMiddleware, async (req, res) => 
 
 // ==================== 记忆系统函数 ====================
 
+function normalizeMemorySessionId(sessionId = 'player') {
+  if (typeof sessionId !== 'string') return 'player'
+  const value = sessionId.trim()
+  return value || 'player'
+}
+
+function getMemoryStorageDir(username, charId) {
+  return path.join('./data', username, 'characters', charId, 'memory')
+}
+
+function getMemoryFileName(sessionId = 'player') {
+  const normalized = normalizeMemorySessionId(sessionId)
+  const safeName = normalized.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `${safeName}.json`
+}
+
+function getLegacyMemoryPath(username, charId) {
+  return path.join('./data', username, 'characters', charId, 'memory.json')
+}
+
+function getSessionMemoryPath(username, charId, sessionId = 'player') {
+  return path.join(getMemoryStorageDir(username, charId), getMemoryFileName(sessionId))
+}
+
 // 获取角色记忆
-async function getCharacterMemory(username, charId) {
-  const memoryPath = path.join('./data', username, 'characters', charId, 'memory.json')
+async function getCharacterMemory(username, charId, sessionId = 'player') {
+  const memoryPath = getSessionMemoryPath(username, charId, sessionId)
+  const legacyMemoryPath = getLegacyMemoryPath(username, charId)
   try {
+    await fs.ensureDir(getMemoryStorageDir(username, charId))
     if (await fs.pathExists(memoryPath)) {
       return await fs.readJson(memoryPath)
+    }
+    if (await fs.pathExists(legacyMemoryPath)) {
+      return await fs.readJson(legacyMemoryPath)
     }
   } catch (e) {
     console.error('读取记忆失败:', e)
@@ -407,18 +438,18 @@ async function getCharacterMemory(username, charId) {
 }
 
 // 保存角色记忆
-async function saveCharacterMemory(username, charId, memory) {
-  const memoryDir = path.join('./data', username, 'characters', charId)
-  const memoryPath = path.join(memoryDir, 'memory.json')
+async function saveCharacterMemory(username, charId, memory, sessionId = 'player') {
+  const memoryDir = getMemoryStorageDir(username, charId)
+  const memoryPath = getSessionMemoryPath(username, charId, sessionId)
   await fs.ensureDir(memoryDir)
   await fs.writeJson(memoryPath, memory, { spaces: 2 })
 }
 
 // 增加消息计数（返回当前轮数）
-async function incrementMemoryMessageCount(username, charId) {
-  const memory = await getCharacterMemory(username, charId)
+async function incrementMemoryMessageCount(username, charId, sessionId = 'player') {
+  const memory = await getCharacterMemory(username, charId, sessionId)
   memory.messageCountSinceLastSummary = (memory.messageCountSinceLastSummary || 0) + 1
-  await saveCharacterMemory(username, charId, memory)
+  await saveCharacterMemory(username, charId, memory, sessionId)
   return memory.messageCountSinceLastSummary
 }
 
@@ -427,9 +458,38 @@ function getTurnsFromHistory(chatHistory) {
   return Math.floor(chatHistory.filter(m => !m.error).length / 2)
 }
 
+async function getSessionChatHistory(username, charId, sessionId = 'player') {
+  const normalizedSessionId = normalizeMemorySessionId(sessionId)
+  const chatsDir = path.join('./data', username, 'characters', charId, 'wechat', 'chats')
+  const sessionChatPath = path.join(chatsDir, `${normalizedSessionId}.jsonl`)
+  try {
+    if (await fs.pathExists(sessionChatPath)) {
+      const content = await fs.readFile(sessionChatPath, 'utf-8')
+      return content
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return null
+          }
+        })
+        .filter(Boolean)
+    }
+  } catch (e) {
+    console.error('读取会话聊天历史失败:', e)
+  }
+
+  if (normalizedSessionId === 'player') {
+    return getCharacterChats(username, charId)
+  }
+  return []
+}
+
 // 实时记忆更新（每回合触发，基于最新一轮对话）
-async function updateMemoryRealtime(username, charId, userMessage, aiReply) {
-  const lockKey = `${username}:${charId}`
+async function updateMemoryRealtime(username, charId, userMessage, aiReply, sessionId = 'player') {
+  const lockKey = `${username}:${charId}:${sessionId}`
 
   // 如果已有更新在进行中，跳过本次（后续会覆盖）
   if (memoryUpdateLocks.get(lockKey)) {
@@ -449,7 +509,7 @@ async function updateMemoryRealtime(username, charId, userMessage, aiReply) {
 
     const settings = getSettings(username)
     const model = settings.ai_model || 'gpt-3.5-turbo'
-    const existingMemory = await getCharacterMemory(username, charId)
+    const existingMemory = await getCharacterMemory(username, charId, sessionId)
     const currentSummary = existingMemory.summary || ''
 
     // 单回合实时更新 Prompt
@@ -503,7 +563,7 @@ Rewrite the [CURRENT MEMORY] to include any new important facts, preferences, or
         summary: newSummary,
         lastUpdatedAt: new Date().toISOString()
       }
-      await saveCharacterMemory(username, charId, newMemory)
+      await saveCharacterMemory(username, charId, newMemory, sessionId)
       console.log(`[Memory] 实时更新完成: ${charId}`)
       return { success: true, memory: newMemory }
     } else {
@@ -519,7 +579,7 @@ Rewrite the [CURRENT MEMORY] to include any new important facts, preferences, or
 }
 
 // 增量更新记忆（追加最近的对话到 summary）- 保留用于手动触发
-async function appendMemory(username, charId) {
+async function appendMemory(username, charId, sessionId = 'player') {
   console.log(`[Memory] 开始增量更新: ${charId}`)
   try {
     const user = getUser(username)
@@ -532,14 +592,14 @@ async function appendMemory(username, charId) {
     const model = settings.ai_model || 'gpt-3.5-turbo'
 
     // 获取最近的聊天记录（只取最近 6 条，约 3 轮对话）
-    const chatHistory = getCharacterChats(username, charId)
+    const chatHistory = await getSessionChatHistory(username, charId, sessionId)
     const recentMessages = chatHistory.filter(m => !m.error).slice(-6)
 
     if (recentMessages.length === 0) {
       return { success: false, error: '没有新消息' }
     }
 
-    const existingMemory = await getCharacterMemory(username, charId)
+    const existingMemory = await getCharacterMemory(username, charId, sessionId)
 
     // 构建增量摘要 prompt
     const recentText = recentMessages
@@ -612,7 +672,7 @@ ${recentText}
         facts: updatedFacts,
         lastAppendedAt: new Date().toISOString()
       }
-      await saveCharacterMemory(username, charId, newMemory)
+      await saveCharacterMemory(username, charId, newMemory, sessionId)
       console.log(`[Memory] 增量更新完成: ${charId}`)
       return { success: true, memory: newMemory }
     }
@@ -625,7 +685,7 @@ ${recentText}
 }
 
 // 深度压缩记忆（重写整个 Summary）
-async function compressMemory(username, charId) {
+async function compressMemory(username, charId, sessionId = 'player') {
   console.log(`[Memory] 开始深度压缩: ${charId}`)
   try {
     const user = getUser(username)
@@ -637,12 +697,12 @@ async function compressMemory(username, charId) {
     const settings = getSettings(username)
     const model = settings.ai_model || 'gpt-3.5-turbo'
 
-    const chatHistory = getCharacterChats(username, charId)
+    const chatHistory = await getSessionChatHistory(username, charId, sessionId)
     if (!chatHistory || chatHistory.length === 0) {
       return { success: false, error: '没有聊天记录' }
     }
 
-    const existingMemory = await getCharacterMemory(username, charId)
+    const existingMemory = await getCharacterMemory(username, charId, sessionId)
 
     // 取最近 40 条消息进行深度压缩
     const recentMessages = chatHistory.filter(m => !m.error).slice(-40)
@@ -706,7 +766,7 @@ ${conversationText}
         lastSummarizedAt: new Date().toISOString(),
         messageCountSinceLastSummary: 0
       }
-      await saveCharacterMemory(username, charId, newMemory)
+      await saveCharacterMemory(username, charId, newMemory, sessionId)
       console.log(`[Memory] 深度压缩完成: ${charId}`)
       return { success: true, memory: newMemory }
     }
@@ -719,9 +779,9 @@ ${conversationText}
 }
 
 // 后台实时记忆更新（Fire-and-forget，每回合触发）
-function runRealtimeMemoryUpdate(username, charId, userMessage, aiReply) {
+function runRealtimeMemoryUpdate(username, charId, userMessage, aiReply, sessionId = 'player') {
   // Fire and forget - 不阻塞响应
-  updateMemoryRealtime(username, charId, userMessage, aiReply)
+  updateMemoryRealtime(username, charId, userMessage, aiReply, sessionId)
     .then(result => {
       if (result.success && !result.unchanged) {
         console.log(`[Memory] 后台实时更新成功: ${charId}`)
@@ -733,7 +793,7 @@ function runRealtimeMemoryUpdate(username, charId, userMessage, aiReply) {
 }
 
 // 摘要历史记录函数（保留用于手动触发）
-export async function summarizeHistory(username, charId) {
+export async function summarizeHistory(username, charId, sessionId = 'player') {
   try {
     const user = getUser(username)
     if (!user?.api_key) {
@@ -744,13 +804,13 @@ export async function summarizeHistory(username, charId) {
     const model = settings.ai_model || 'gpt-3.5-turbo'
 
     // 获取聊天记录
-    const chatHistory = getCharacterChats(username, charId)
+    const chatHistory = await getSessionChatHistory(username, charId, sessionId)
     if (!chatHistory || chatHistory.length === 0) {
       return { success: false, error: '没有聊天记录可供摘要' }
     }
 
     // 获取现有记忆
-    const existingMemory = await getCharacterMemory(username, charId)
+    const existingMemory = await getCharacterMemory(username, charId, sessionId)
 
     // 构建对话文本
     const conversationText = chatHistory
@@ -817,7 +877,7 @@ ${conversationText}
           lastSummarizedAt: new Date().toISOString(),
           messageCountSinceLastSummary: 0
         }
-        await saveCharacterMemory(username, charId, newMemory)
+        await saveCharacterMemory(username, charId, newMemory, sessionId)
         console.log(`[Memory] 已为角色 ${charId} 生成摘要`)
         return { success: true, memory: newMemory }
       } else {
@@ -1275,10 +1335,22 @@ app.get('/api/chat/character/:charId/history', authMiddleware, (req, res) => {
 // 发送消息给角色
 app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) => {
   const { charId } = req.params
-  const { message } = req.body
+  const { message, transferData, type, amount, content, sessionId = 'player' } = req.body
+  const currentSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : 'player'
 
-  if (!message) {
+  const transferAmountInput = amount ?? transferData?.amount
+  const isTransferMessage = type === 'transfer' || transferAmountInput !== undefined
+  const transferContent = ((content ?? message ?? '转账给你的').toString()).trim() || '转账给你的'
+  const userMessageText = ((message ?? transferContent).toString()).trim()
+
+  if (!userMessageText) {
     return res.status(400).json({ error: '消息不能为空' })
+  }
+
+  let transferAmount = 0
+  if (isTransferMessage) {
+    transferAmount = parseFloat(transferAmountInput) || 0
+    console.log(`[Transfer] 检测到转账消息: ¥${transferAmount}, 留言: ${transferContent}`)
   }
 
   const user = getUser(req.user.username)
@@ -1344,20 +1416,25 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     await fs.ensureDir(chatsDir)
     const files = await fs.readdir(chatsDir)
     existingSessions = files
-      .filter(f => f.endsWith('.jsonl') && f !== 'player.jsonl' && f !== 'npc_team.jsonl')
+      .filter(f => f.endsWith('.jsonl') && f !== 'player.jsonl' && !f.startsWith('player__') && f !== 'npc_team.jsonl')
       .map(f => f.replace('.jsonl', ''))
   } catch (e) {
     console.error('读取会话列表失败:', e)
   }
 
-  // 获取绑定的人设信息
+  const sessionPersonaId = currentSessionId.startsWith('player__')
+    ? currentSessionId.slice('player__'.length)
+    : null
+  const effectivePersonaId = sessionPersonaId || wechatProfile?.boundPersonaId || null
+
+  // 获取绑定的人设信息（优先使用 sessionId 对应的人设）
   let boundPersona = null
-  if (wechatProfile?.boundPersonaId) {
+  if (effectivePersonaId && effectivePersonaId !== 'default') {
     try {
       const personasPath = path.join('./data', req.user.username, 'personas.json')
       if (await fs.pathExists(personasPath)) {
         const personas = await fs.readJson(personasPath)
-        boundPersona = personas.find(p => p.id === wechatProfile.boundPersonaId)
+        boundPersona = personas.find(p => p.id === effectivePersonaId)
       }
     } catch (e) {
       console.error('读取人设失败:', e)
@@ -1365,7 +1442,7 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
   }
 
   // 获取角色记忆
-  const memory = await getCharacterMemory(req.user.username, charId)
+  const memory = await getCharacterMemory(req.user.username, charId, currentSessionId)
 
   // 获取用户未同步给该角色的朋友圈
   let unsyncedPlayerMoments = []
@@ -1373,8 +1450,8 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     const playerMomentsPath = path.join('./data', req.user.username, 'player_moments.json')
     if (await fs.pathExists(playerMomentsPath)) {
       const playerMomentsData = await fs.readJson(playerMomentsPath)
-      // 获取角色绑定的人设ID（如果没有绑定，使用 'default'）
-      const charBoundPersonaId = wechatProfile?.boundPersonaId || 'default'
+      // 获取角色绑定的人设ID（优先 session 人设）
+      const charBoundPersonaId = effectivePersonaId || 'default'
       // 筛选出与当前人设相关且未同步给该角色的朋友圈
       unsyncedPlayerMoments = playerMomentsData.filter(m => {
         // 只同步与角色绑定人设匹配的朋友圈
@@ -1392,7 +1469,7 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
 
   // 获取历史消息构建上下文（从 wechat/chats/player.jsonl 读取）
   let history = []
-  const playerChatPath = path.join(chatsDir, 'player.jsonl')
+  const playerChatPath = path.join(chatsDir, `${currentSessionId}.jsonl`)
   try {
     await fs.ensureDir(chatsDir)
     if (await fs.pathExists(playerChatPath)) {
@@ -1419,8 +1496,8 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
 
   // 添加当前用户消息到历史（如果还没有）
   const lastMsg = history[history.length - 1]
-  if (!lastMsg || lastMsg.content !== message || lastMsg.role !== 'user') {
-    history.push({ role: 'user', content: message })
+  if (!lastMsg || lastMsg.content !== userMessageText || lastMsg.role !== 'user') {
+    history.push({ role: 'user', content: userMessageText })
   }
 
   // 构建 profile 更新提示
@@ -1428,6 +1505,9 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
   const needWxId = !wechatProfile?.wxId || wechatProfile.wxId === '' || wechatProfile.wxId.startsWith('wxid_')
   // 检测个性签名是否是初始状态（空）
   const needSignature = !wechatProfile?.signature || wechatProfile.signature === '' || wechatProfile.signature.trim() === ''
+
+  // 获取当前好感度（需要在 jsonTaskPrompt 之前获取，用于转账决策）
+  const currentAffection = getAffection(req.user.username, charId, currentSessionId)
 
   // 构建更强调的 profile 提示
   let profilePrompt = ''
@@ -1444,9 +1524,15 @@ Example: "profile": {"wxId": "your_custom_id", "signature": "你的个性签名"
 `
   }
 
+  const transferSystemPrompt = isTransferMessage
+    ? `User transferred ${transferAmount.toFixed(2)} saying: '${transferContent}'. Decide to accept or return.`
+    : ''
+
   // 构建综合提示（profile + spy chats + moments + user moments interaction + redpackets）
   let jsonTaskPrompt = `
+
 ${profilePrompt}
+${transferSystemPrompt}
 [RESPONSE FORMAT - STRICT RAW JSON ONLY]
 CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
 - NO \`\`\`json
@@ -1461,12 +1547,12 @@ Your response MUST be a valid JSON object with this structure:
   "spyChats": null,
   "moment": null,
   "momentInteractions": null,
-  "affection": {"change": 0, "reason": "无明显变化"}
+  "affection": {"change": 0, "reason": "无明显变化"}${isTransferMessage ? ',\n  "transfer_action": "accept" or "return"' : ''}
 }
 
 FIELD DETAILS:
 - reply: (REQUIRED) Your chat message. Use ### to split into multiple messages.
-- profile: ${needWxId || needSignature ? '(**REQUIRED NOW - 必须填写!**) Must include wxId and/or signature. DO NOT leave this as null!' : '(optional) null or {"wxId": "...", "signature": "..."}'}
+- profile: ${needWxId || needSignature ? '(**REQUIRED NOW - 必须填写!**) Must include wxId and/or signature. DO NOT leave this as null!' : '(optional) null or {"wxId": "...", "signature": "..."}'}${isTransferMessage ? '\n- transfer_action: (REQUIRED for transfer) Must be "accept" or "return" - your decision on the transfer' : ''}
 - redpackets: null or [{"amount": "5.20", "note": "爱你"}]
 - spyChats: null or array of spy chat sessions
 - moment: null or {"content": "朋友圈内容", "location": "位置"}
@@ -1612,7 +1698,33 @@ Examples of natural comments:
 Set momentInteractions to null if you don't want to interact with any moments.
 ` : ''}
 
-[AFFECTION EVALUATION - MANDATORY]
+${isTransferMessage ? `[TRANSFER DECISION - 转账决策 - MANDATORY]
+The user just sent you a WeChat transfer of ¥${transferAmount} with note: "${transferContent}".
+
+You MUST decide whether to ACCEPT or RETURN this transfer based on:
+1. Your current relationship level (${currentAffection?.level || 1} - "${currentAffection?.level_title || '陌生人'}")
+2. Your personality and character traits
+3. The context of your conversation
+4. Whether accepting money feels appropriate given your relationship
+
+Decision guidelines:
+- Level 1-2 (陌生人/点头之交): Usually RETURN - "我们还不太熟，不好意思收你的钱"
+- Level 3-4 (普通朋友/好朋友): Consider context - small amounts for specific reasons may be OK
+- Level 5+ (密友/恋人等): More likely to ACCEPT - close relationships share resources
+- If the amount seems excessive or inappropriate: RETURN
+- If you're uncomfortable or it feels like bribery: RETURN
+- If it's a sweet gesture from someone you care about: ACCEPT
+
+SET transfer_action in your JSON response:
+- "accept" = You accept the transfer (money will be deducted from user)
+- "return" = You return the transfer (money stays with user)
+
+Your reply message should naturally acknowledge the transfer and explain your decision in character.
+Examples:
+- Accept: "哎呀谢谢你！正好可以买杯奶茶~" (transfer_action: "accept")
+- Return: "这钱我不能收...我们之间不需要这样" (transfer_action: "return")
+- Return: "你对我太好了，但是这钱还是留着自己用吧" (transfer_action: "return")
+` : ''}[AFFECTION EVALUATION - MANDATORY]
 At the end of your JSON response, you MUST evaluate how the user's message affected your affection towards them.
 This represents YOUR emotional response to what they said or did.
 
@@ -1685,8 +1797,7 @@ IMPORTANT: Use the above memory to maintain consistency in your responses. Remem
 `
   }
 
-  // 获取当前好感度
-  const currentAffection = getAffection(req.user.username, charId)
+  // 构建好感度提示（currentAffection 已在上面定义）
   const affectionPrompt = `
 [RELATIONSHIP STATUS - 好感度系统]
 Current Affection Score: ${currentAffection.score}/1000
@@ -1709,10 +1820,10 @@ Don't explicitly mention the level or score - just let it influence your tone an
   const healthPrompt = healthContext ? `\n${healthContext}\n` : ''
 
   // 检测用户输入是否过短（需要AI救场）
-  const isShortInput = message.trim().length <= 5 || /^(嗯|哦|好|行|ok|OK|噢|啊|是|对|好的|嗯嗯|哦哦|知道了|了解|明白|收到)$/i.test(message.trim())
+  const isShortInput = userMessageText.trim().length <= 5 || /^(嗯|哦|好|行|ok|OK|噢|啊|是|对|好的|嗯嗯|哦哦|知道了|了解|明白|收到)$/i.test(userMessageText.trim())
   const conversationReviveHint = isShortInput ? `
 [URGENT: CONVERSATION RESCUE MODE]
-The user just sent a very short/dry response ("${message}"). This is YOUR chance to shine!
+The user just sent a very short/dry response ("${userMessageText}"). This is YOUR chance to shine!
 - You MUST inject energy and curiosity into the conversation
 - Ask an engaging follow-up question or share something interesting
 - DO NOT mirror their dry response - be the lively one!
@@ -2011,7 +2122,7 @@ ${jsonTaskPrompt}`
 
           if (change !== 0) {
             // 使用绑定的人设 ID 作为 sessionId，实现用户好感度隔离
-            const personaSessionId = wechatProfile?.boundPersonaId || 'player'
+            const personaSessionId = currentSessionId
             const affectionResult = updateAffection(req.user.username, charId, change, reason, personaSessionId)
             console.log(`[Affection] ${character.name} (${personaSessionId}): ${change > 0 ? '+' : ''}${change} (${reason}) → 等级: ${affectionResult.level_title}`)
 
@@ -2031,6 +2142,56 @@ ${jsonTaskPrompt}`
       console.error('处理AI响应副作用失败:', parseErr)
     }
 
+    // ========== 转账处理（原子事务）==========
+    let transferResult = null
+    if (isTransferMessage && transferAmount > 0) {
+      try {
+        // 标准化决策输出：强制小写并映射
+        const rawAction = (parsed?.rawParsed?.transfer_action || parsed?.transfer_action || 'return').toString().toLowerCase().trim()
+        // 明确映射：accept/accepted/receive -> accepted，其他 -> returned
+        const transferAction = (rawAction.includes('accept') || rawAction.includes('receive')) ? 'accepted' : 'returned'
+        console.log(`[Transfer] AI 原始决策: ${rawAction}, 标准化后: ${transferAction}, 金额: ¥${transferAmount}`)
+
+        if (transferAction === 'accepted') {
+          // AI 接受转账 - 执行扣款
+          const deductResult = await deductBalance(req.user.username, transferAmount, `转账给 ${character.name}`)
+
+          if (deductResult.success) {
+            transferResult = {
+              action: 'accepted',
+              amount: transferAmount,
+              charName: character.name,
+              newBalance: deductResult.balance
+            }
+            console.log(`[Transfer] 转账成功: ¥${transferAmount} -> ${character.name}, 余额: ¥${deductResult.balance}`)
+          } else {
+            // 扣款失败（余额不足等）- 自动退回
+            transferResult = {
+              action: 'returned',
+              amount: transferAmount,
+              reason: deductResult.error || '余额不足'
+            }
+            console.log(`[Transfer] 扣款失败，自动退回: ${deductResult.error}`)
+          }
+        } else {
+          // AI 退回转账 - 不扣款
+          transferResult = {
+            action: 'returned',
+            amount: transferAmount,
+            reason: 'AI 决定退回'
+          }
+          console.log(`[Transfer] AI 退回转账: ¥${transferAmount}`)
+        }
+      } catch (transferErr) {
+        console.error('[Transfer] 处理转账失败:', transferErr)
+        transferResult = {
+          action: 'returned',
+          amount: transferAmount,
+          reason: '处理失败'
+        }
+      }
+    }
+
     // ========== 保存到 wechat/chats/player.jsonl（统一存储）==========
     const playerChatPath = path.join(chatsDir, 'player.jsonl')
     await fs.ensureDir(chatsDir)
@@ -2039,7 +2200,7 @@ ${jsonTaskPrompt}`
     const userMessage = {
       id: Date.now(),
       sender: 'player',
-      text: message,
+      text: userMessageText,
       timestamp: new Date().toISOString()
     }
     await fs.appendFile(playerChatPath, JSON.stringify(userMessage) + '\n', 'utf-8')
@@ -2143,12 +2304,23 @@ ${jsonTaskPrompt}`
       text: reply
     })
 
-    // 返回所有 AI 消息给前端（数组格式）
-    res.json({ success: true, data: aiMessages })
+    // 返回所有 AI 消息给前端（数组格式），包含转账结果
+    if (isTransferMessage) {
+      const transferStatus = transferResult?.action === 'accepted' ? 'accepted' : 'returned'
+      res.json({
+        success: true,
+        transfer_status: transferStatus,
+        reply: (replyBubbles[0] || textWithoutRedpackets || '').trim(),
+        data: aiMessages,
+        transferResult
+      })
+    } else {
+      res.json({ success: true, data: aiMessages, transferResult })
+    }
 
     // ========== 后台实时记忆更新（暂时禁用，用于测试）==========
     // setImmediate(() => {
-    //   runRealtimeMemoryUpdate(req.user.username, charId, message, reply)
+    //   runRealtimeMemoryUpdate(req.user.username, charId, userMessageText, reply)
     // })
 
   } catch (error) {
@@ -2159,6 +2331,86 @@ ${jsonTaskPrompt}`
     })
 
     res.json({ success: true, data: errorMessage })
+  }
+})
+
+app.post('/api/chat/batch', authMiddleware, async (req, res) => {
+  const { charId, items, sessionId = 'player' } = req.body || {}
+
+  if (!charId) {
+    return res.status(400).json({ error: 'charId 不能为空' })
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items 不能为空' })
+  }
+
+  const normalizedItems = items.map(item => ({
+    type: item?.type || 'text',
+    content: (item?.content || '').toString().trim(),
+    amount: item?.amount,
+    tempId: item?.tempId
+  }))
+
+  const transferItem = normalizedItems.find(item => item.type === 'transfer')
+  const mergedMessage = normalizedItems
+    .map(item => item.content)
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+
+  const body = {
+    message: mergedMessage || transferItem?.content || '...',
+    sessionId
+  }
+
+  if (transferItem) {
+    body.type = 'transfer'
+    body.amount = transferItem.amount
+    body.content = transferItem.content || '转账给你的'
+  }
+
+  try {
+    const baseUrl = `${req.protocol}://${req.get('host')}`
+    const forwardResponse = await fetch(`${baseUrl}/api/chat/character/${encodeURIComponent(charId)}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: req.headers.authorization || ''
+      },
+      body: JSON.stringify(body)
+    })
+
+    const payload = await forwardResponse.json()
+    if (!forwardResponse.ok) {
+      return res.status(forwardResponse.status).json(payload)
+    }
+
+    const transferStatus = transferItem
+      ? (payload?.transfer_status === 'accepted' ? 'accepted' : 'returned')
+      : undefined
+
+    const results = normalizedItems.map(item => ({
+      tempId: item.tempId,
+      type: item.type,
+      status: item.type === 'transfer' ? transferStatus : 'sent'
+    }))
+
+    const aiMessages = Array.isArray(payload?.data) ? payload.data : []
+    const aiReply = (payload?.reply || '').toString().trim()
+
+    return res.json({
+      success: true,
+      data: {
+        results,
+        aiMessages,
+        reply: aiReply,
+        transfer_status: transferStatus
+      }
+    })
+  } catch (error) {
+    console.error('[Batch Chat] 发送失败:', error)
+    return res.status(500).json({ error: error.message || '批量发送失败' })
   }
 })
 
@@ -2254,4 +2506,17 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`WebSocket server running on ws://0.0.0.0:${PORT}`)
   console.log(`用户数据存储在: ./data/<username>/`)
 })
+
+
+
+
+
+
+
+
+
+
+
+
+
 

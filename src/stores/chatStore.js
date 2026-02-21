@@ -23,7 +23,7 @@ export const useChatStore = defineStore('chat', () => {
   const unreadCounts = reactive({})
 
   // 当前正在查看的角色 ID
-  const activeCharId = ref(null)
+  const activeChatKey = ref(null)
 
   // 是否正在发送队列（用于显示"正在输入"）
   const sendingQueue = reactive({})
@@ -46,13 +46,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // 检查角色是否正在回复中
-  function isPending(charId) {
-    return pendingRequests.value.has(charId)
+  function isPending(charId, sessionId = 'player') {
+    return pendingRequests.value.has(getCacheKey(charId, sessionId))
   }
 
   // 获取角色未读数
-  function getUnreadCount(charId) {
-    return unreadCounts[charId] || 0
+  function getUnreadCount(charId, sessionId = 'player') {
+    const cacheKey = getCacheKey(charId, sessionId)
+    return unreadCounts[cacheKey] || 0
   }
 
   // 获取总未读数
@@ -67,6 +68,10 @@ export const useChatStore = defineStore('chat', () => {
     return `${charId}:${sessionId}`
   }
 
+  function isPlayerSession(sessionId = 'player') {
+    return sessionId === 'player' || sessionId.startsWith('player__')
+  }
+
   // ==================== 工具函数 ====================
 
   // 延迟函数
@@ -79,34 +84,61 @@ export const useChatStore = defineStore('chat', () => {
     return Math.min(text.length * 50 + 500, 2500)
   }
 
+  function ensureConversation(cacheKey) {
+    if (!conversations[cacheKey]) {
+      conversations[cacheKey] = []
+    }
+  }
+
+  function shouldIncreaseUnread(charId, sessionId, message) {
+    if (!isPlayerSession(sessionId)) return false
+    if (!message) return false
+
+    const sender = message.sender === 'user' ? 'player' : message.sender
+    if (sender === 'player' || sender === 'system') return false
+    if (activeChatKey.value === getCacheKey(charId, sessionId)) return false
+
+    return true
+  }
+
+  function appendMessage(charId, sessionId, message, normalize = true) {
+    const cacheKey = getCacheKey(charId, sessionId)
+    ensureConversation(cacheKey)
+
+    const finalMessage = normalize ? normalizeMessage(message) : message
+    conversations[cacheKey].push(finalMessage)
+
+    if (shouldIncreaseUnread(charId, sessionId, finalMessage)) {
+      unreadCounts[cacheKey] = (unreadCounts[cacheKey] || 0) + 1
+    }
+
+    return finalMessage
+  }
+
   // ==================== Actions ====================
 
   // 核心：发送消息并获取 AI 回复（Fetch-then-Render 模式）
   async function sendMessageBackground(charId, text, sessionId = 'player', options = {}) {
     const { onTypingStart, onTypingEnd, onBubbleAdded } = options
-    const cacheKey = getCacheKey(charId, sessionId)
 
-    // === 第一阶段：准备 ===
-    if (!conversations[cacheKey]) {
-      conversations[cacheKey] = []
-    }
-    // 立即显示用户消息
-    conversations[cacheKey].push({
+    // === First stage: prepare ===
+    // show user message immediately
+    appendMessage(charId, sessionId, {
       id: Date.now(),
       sender: 'player',
       text,
       timestamp: new Date().toISOString()
-    })
+    }, false)
 
-    // 锁定状态
-    pendingRequests.value.add(charId)
+    const cacheKey = getCacheKey(charId, sessionId)
+    pendingRequests.value.add(cacheKey)
     sendingQueue[charId] = true
     onTypingStart?.()
 
     try {
       // === 第二阶段：网络请求（只执行一次！）===
       console.log('[sendMessageBackground] 发送 API 请求...')
-      const result = await sendAIMessage(charId, text)
+      const result = await sendAIMessage(charId, text, { sessionId })
       console.log('[sendMessageBackground] API 响应:', result)
 
       // === 第三阶段：解析 ===
@@ -127,56 +159,56 @@ export const useChatStore = defineStore('chat', () => {
         if (!bubbleText?.trim()) continue
 
         // 计算延迟
-        const delay = index === 0 ? 600 : Math.min(bubbleText.length * 50 + 400, 2000)
+        const delay = index === 0 ? 800 : Math.min(bubbleText.length * 70 + 700, 2800)
         await wait(delay)
 
         // 显示气泡（纯本地操作，保留完整消息结构）
         if (typeof msg === 'object') {
           // 完整消息对象（可能包含 type, redpacketData 等）
-          conversations[cacheKey].push({
+          appendMessage(charId, sessionId, {
             ...msg,
             id: msg.id || Date.now() + index
           })
         } else {
           // 纯文本
-          conversations[cacheKey].push({
+          appendMessage(charId, sessionId, {
             id: Date.now() + index,
             sender: 'character',
             text: bubbleText,
             timestamp: new Date().toISOString()
-          })
+          }, false)
         }
         onBubbleAdded?.()
       }
 
     } catch (e) {
       console.error('[sendMessageBackground] 错误:', e)
-      conversations[cacheKey].push({
+      appendMessage(charId, sessionId, {
         id: Date.now(),
         sender: 'system',
-        text: `错误: ${e.message}`,
+        text: `Error: ${e.message}`,
         timestamp: new Date().toISOString()
-      })
+      }, false)
     } finally {
       // === 第五阶段：收尾 ===
-      pendingRequests.value.delete(charId)
+      pendingRequests.value.delete(cacheKey)
       sendingQueue[charId] = false
       onTypingEnd?.()
     }
   }
 
   // 进入聊天窗口
-  function enterChat(charId) {
-    activeCharId.value = charId
-    // 清空该角色的未读数
-    if (unreadCounts[charId]) {
-      unreadCounts[charId] = 0
+  function enterChat(charId, sessionId = 'player') {
+    const cacheKey = getCacheKey(charId, sessionId)
+    activeChatKey.value = cacheKey
+    if (unreadCounts[cacheKey]) {
+      unreadCounts[cacheKey] = 0
     }
   }
 
   // 离开聊天窗口
   function leaveChat() {
-    activeCharId.value = null
+    activeChatKey.value = null
   }
 
   // 加载聊天记录（带缓存）
@@ -236,18 +268,9 @@ export const useChatStore = defineStore('chat', () => {
 
   // 发送消息（仅发送，不触发 AI）
   async function sendMessage(charId, text, sessionId = 'player', sender = 'player', senderName, options = {}) {
-    const cacheKey = getCacheKey(charId, sessionId)
     try {
       const msg = await sendChatMessage(charId, text, sessionId, sender, senderName, options)
-      const normalizedMsg = normalizeMessage(msg)
-
-      // 添加到缓存
-      if (!conversations[cacheKey]) {
-        conversations[cacheKey] = []
-      }
-      conversations[cacheKey].push(normalizedMsg)
-
-      return normalizedMsg
+      return appendMessage(charId, sessionId, msg)
     } catch (e) {
       console.error('发送消息失败:', e)
       throw e
@@ -256,7 +279,6 @@ export const useChatStore = defineStore('chat', () => {
 
   // AI 发送红包
   async function sendRedPacketFromAI(charId, amount, note, sessionId, profile, character) {
-    const cacheKey = getCacheKey(charId, sessionId)
     try {
       const msg = await sendChatMessage(
         charId,
@@ -274,10 +296,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       )
 
-      if (!conversations[cacheKey]) {
-        conversations[cacheKey] = []
-      }
-      conversations[cacheKey].push(normalizeMessage(msg))
+      appendMessage(charId, sessionId, msg)
     } catch (e) {
       console.error('AI 发送红包失败:', e)
     }
@@ -328,7 +347,7 @@ export const useChatStore = defineStore('chat', () => {
             }
           }
         )
-        conversations[cacheKey].push(normalizeMessage(confirmMsg))
+        appendMessage(charId, sessionId, confirmMsg)
       } catch (e) {
         console.error('发送收款确认消息失败:', e)
       }
@@ -337,11 +356,7 @@ export const useChatStore = defineStore('chat', () => {
 
   // 直接添加消息到缓存（用于本地创建的消息）
   function addMessageToCache(charId, message, sessionId = 'player') {
-    const cacheKey = getCacheKey(charId, sessionId)
-    if (!conversations[cacheKey]) {
-      conversations[cacheKey] = []
-    }
-    conversations[cacheKey].push(normalizeMessage(message))
+    appendMessage(charId, sessionId, message)
   }
 
   // 更新缓存中的消息
@@ -361,12 +376,11 @@ export const useChatStore = defineStore('chat', () => {
   function clearCache(charId, sessionId = null) {
     if (charId) {
       if (sessionId) {
-        // 清空特定会话
         const cacheKey = getCacheKey(charId, sessionId)
         delete conversations[cacheKey]
         delete paginationInfo[cacheKey]
+        delete unreadCounts[cacheKey]
       } else {
-        // 清空该角色的所有会话（遍历所有以 charId: 开头的 key）
         const prefix = `${charId}:`
         Object.keys(conversations).forEach(key => {
           if (key === charId || key.startsWith(prefix)) {
@@ -378,16 +392,19 @@ export const useChatStore = defineStore('chat', () => {
             delete paginationInfo[key]
           }
         })
+        Object.keys(unreadCounts).forEach(key => {
+          if (key === charId || key.startsWith(prefix)) {
+            delete unreadCounts[key]
+          }
+        })
       }
-      // 清空未读数（未读数仍以 charId 为 key）
-      delete unreadCounts[charId]
     } else {
-      // 清空所有
       Object.keys(conversations).forEach(key => delete conversations[key])
       Object.keys(paginationInfo).forEach(key => delete paginationInfo[key])
       Object.keys(unreadCounts).forEach(key => delete unreadCounts[key])
     }
   }
+
 
   // ==================== Helper Functions ====================
 
@@ -450,7 +467,7 @@ export const useChatStore = defineStore('chat', () => {
     conversations,
     pendingRequests,
     unreadCounts,
-    activeCharId,
+    activeChatKey,
     sendingQueue,
     paginationInfo,
 

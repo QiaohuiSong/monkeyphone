@@ -22,22 +22,28 @@ const transferData = computed(() => {
 
 const amount = computed(() => transferData.value.amount || '0.00')
 
-// 状态：pending (待收款) | accepted (已接收) | received_confirm (收款确认)
+// 状态：pending (待收款) | accepted (已接收) | returned (已退还) | received_confirm (收款确认)
 const status = computed(() => transferData.value.status || 'accepted')
 
 // 待收款状态（仅右侧/自己发的转账才显示深橙色）
 const isPending = computed(() => status.value === 'pending')
 
+// 已退还状态
+const isReturned = computed(() => status.value === 'returned')
+
 // 收款确认状态（左侧 Char 发的"已收款"气泡）
 const isReceivedConfirm = computed(() => status.value === 'received_confirm')
 
-// 是否已完成（已被接收 或 收款确认）
+// 是否已完成（已被接收 或 收款确认 或 已退还）
 const isCompleted = computed(() => !isPending.value)
 
 // 状态文字
 const statusText = computed(() => {
   if (isPending.value) {
     return '待收款'
+  }
+  if (isReturned.value) {
+    return '已退还'
   }
   if (isReceivedConfirm.value) {
     return '已收款'
@@ -48,7 +54,7 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="transfer-bubble" :class="{ pending: isPending, accepted: isCompleted }">
+  <div class="transfer-bubble" :class="{ pending: isPending, accepted: isCompleted && !isReturned, returned: isReturned }">
     <!-- 主体内容 -->
     <div class="transfer-main">
       <!-- 左侧图标 -->
@@ -96,6 +102,12 @@ const statusText = computed(() => {
 /* 已接收状态 - 浅橙色 */
 .transfer-bubble.accepted {
   background: linear-gradient(135deg, #f9d5a0 0%, #f5c78e 100%);
+}
+
+/* 已退还状态 - 灰色 */
+.transfer-bubble.returned {
+  background: linear-gradient(135deg, #c8c8c8 0%, #b0b0b0 100%);
+  opacity: 0.85;
 }
 
 .transfer-main {

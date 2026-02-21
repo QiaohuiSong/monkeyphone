@@ -1,14 +1,26 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { ChevronLeft, Save, RefreshCw, Plus, Trash2, Brain } from 'lucide-vue-next'
-import { getMyCharacters, getCharacterForChat } from '../../services/api.js'
-import { getMemory, updateMemory, triggerSummarize } from '../../services/api.js'
+import { Save, RefreshCw, Plus, Trash2, Brain } from 'lucide-vue-next'
+import {
+  getMyCharacters,
+  getCharacterForChat,
+  getPersonas,
+  getMemory,
+  updateMemory,
+  triggerSummarize
+} from '../../services/api.js'
 
-// 角色列表
-const characters = ref([])
+function buildPlayerSessionId(personaId) {
+  return personaId ? `player__${personaId}` : 'player'
+}
+
 const selectedCharId = ref(null)
+const selectedSessionId = ref('player')
 
-// 记忆数据
+const personas = ref([])
+const myCharacters = ref([])
+const plazaCharacters = ref([])
+
 const memory = ref({
   summary: '',
   facts: [],
@@ -16,73 +28,128 @@ const memory = ref({
   messageCountSinceLastSummary: 0
 })
 
-// 状态
 const loading = ref(false)
 const saving = ref(false)
 const summarizing = ref(false)
 const message = ref('')
-const messageType = ref('info') // info, success, error
+const messageType = ref('info')
 
-// 新增 fact 的临时数据
 const newFactKey = ref('')
 const newFactValue = ref('')
 
-// 当前选中的角色
-const selectedCharacter = computed(() => {
-  return characters.value.find(c => c.id === selectedCharId.value)
+const chatUsers = computed(() => {
+  const list = [{ id: null, name: '默认', sessionId: buildPlayerSessionId(null) }]
+  personas.value.forEach(persona => {
+    list.push({
+      id: persona.id,
+      name: persona.name || '未命名用户',
+      sessionId: buildPlayerSessionId(persona.id)
+    })
+  })
+  return list
+})
+
+const currentSessionName = computed(() => {
+  const current = chatUsers.value.find(user => user.sessionId === selectedSessionId.value)
+  return current?.name || '默认'
+})
+
+const characters = computed(() => {
+  const sessionId = selectedSessionId.value
+  const myCharList = [...myCharacters.value]
+  const myIds = new Set(myCharList.map(c => c.id))
+  const sessionPlaza = plazaCharacters.value.filter(c => {
+    const sessionIds = Array.isArray(c.sessionIds) && c.sessionIds.length > 0 ? c.sessionIds : ['player']
+    return sessionIds.includes(sessionId)
+  })
+  for (const char of sessionPlaza) {
+    if (myIds.has(char.id)) continue
+    myCharList.push(char)
+  }
+  return myCharList
 })
 
 onMounted(async () => {
-  await loadCharacters()
+  await Promise.all([loadPersonas(), loadCharacters()])
 })
 
-watch(selectedCharId, async (newId) => {
-  if (newId) {
-    await loadMemory()
+watch(chatUsers, (users) => {
+  if (!users.some(user => user.sessionId === selectedSessionId.value)) {
+    selectedSessionId.value = 'player'
   }
+}, { immediate: true })
+
+watch(characters, (list) => {
+  if (!list.some(c => c.id === selectedCharId.value)) {
+    selectedCharId.value = list[0]?.id || null
+  }
+}, { immediate: true })
+
+watch([selectedCharId, selectedSessionId], async ([charId]) => {
+  if (!charId) return
+  await loadMemory()
 })
+
+function parseChattedPlazaEntries() {
+  try {
+    const saved = localStorage.getItem('chatted_plaza_chars')
+    if (!saved) return []
+    const parsed = JSON.parse(saved)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map(item => {
+        if (typeof item === 'string') return { id: item, sessionIds: ['player'] }
+        if (item && typeof item === 'object' && item.id) {
+          return {
+            id: item.id,
+            sessionIds: Array.isArray(item.sessionIds) && item.sessionIds.length > 0 ? item.sessionIds : ['player']
+          }
+        }
+        return null
+      })
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+async function loadPersonas() {
+  try {
+    personas.value = await getPersonas()
+  } catch (e) {
+    console.error('加载人设失败:', e)
+    personas.value = []
+  }
+}
 
 async function loadCharacters() {
   try {
     loading.value = true
-
-    // 加载我的角色
     const myChars = await getMyCharacters()
-    const charList = [...myChars]
+    myCharacters.value = [...myChars]
+
+    const entries = parseChattedPlazaEntries()
+    const uniqueIds = [...new Set(entries.map(entry => entry.id))]
+    const loadedPlaza = []
     const myCharIds = new Set(myChars.map(c => c.id))
-
-    // 加载聊过的广场角色（从 localStorage）
-    try {
-      const saved = localStorage.getItem('chatted_plaza_chars')
-      if (saved) {
-        const plazaCharIds = JSON.parse(saved)
-        for (const charId of plazaCharIds) {
-          // 跳过已是我的角色的
-          if (myCharIds.has(charId)) continue
-
-          try {
-            const charData = await getCharacterForChat(charId)
-            if (charData) {
-              charList.push({
-                id: charData.id,
-                name: charData.name,
-                avatar: charData.avatar,
-                isPlazaChar: true
-              })
-            }
-          } catch (e) {
-            console.warn(`广场角色 ${charId} 加载失败`)
-          }
-        }
+    for (const charId of uniqueIds) {
+      if (myCharIds.has(charId)) continue
+      try {
+        const charData = await getCharacterForChat(charId)
+        if (!charData) continue
+        const entry = entries.find(item => item.id === charId)
+        loadedPlaza.push({
+          id: charData.id,
+          name: charData.name,
+          avatar: charData.avatar,
+          isPlazaChar: true,
+          sessionIds: entry?.sessionIds || ['player']
+        })
+      } catch (e) {
+        console.warn(`广场角色 ${charId} 加载失败`)
       }
-    } catch (e) {
-      console.error('加载广场角色失败:', e)
     }
-
-    characters.value = charList
-    if (characters.value.length > 0 && !selectedCharId.value) {
-      selectedCharId.value = characters.value[0].id
-    }
+    plazaCharacters.value = loadedPlaza
   } catch (e) {
     showMessage('加载角色列表失败: ' + e.message, 'error')
   } finally {
@@ -92,10 +159,9 @@ async function loadCharacters() {
 
 async function loadMemory() {
   if (!selectedCharId.value) return
-
   try {
     loading.value = true
-    memory.value = await getMemory(selectedCharId.value)
+    memory.value = await getMemory(selectedCharId.value, selectedSessionId.value)
   } catch (e) {
     showMessage('加载记忆失败: ' + e.message, 'error')
     memory.value = {
@@ -111,13 +177,12 @@ async function loadMemory() {
 
 async function saveMemory() {
   if (!selectedCharId.value) return
-
   try {
     saving.value = true
     await updateMemory(selectedCharId.value, {
       summary: memory.value.summary,
       facts: memory.value.facts
-    })
+    }, selectedSessionId.value)
     showMessage('记忆已保存', 'success')
   } catch (e) {
     showMessage('保存失败: ' + e.message, 'error')
@@ -128,11 +193,10 @@ async function saveMemory() {
 
 async function handleSummarize() {
   if (!selectedCharId.value) return
-
   try {
     summarizing.value = true
     showMessage('正在生成摘要...', 'info')
-    const result = await triggerSummarize(selectedCharId.value)
+    const result = await triggerSummarize(selectedCharId.value, selectedSessionId.value)
     memory.value = result
     showMessage('摘要生成成功', 'success')
   } catch (e) {
@@ -147,12 +211,10 @@ function addFact() {
     showMessage('请输入完整的关键信息', 'error')
     return
   }
-
   memory.value.facts.push({
     key: newFactKey.value.trim(),
     value: newFactValue.value.trim()
   })
-
   newFactKey.value = ''
   newFactValue.value = ''
 }
@@ -203,6 +265,15 @@ function formatDate(isoString) {
     <div class="content">
       <!-- 角色选择 -->
       <div class="section">
+        <label class="section-label">选择用户</label>
+        <select v-model="selectedSessionId" class="select-input" :disabled="loading">
+          <option v-for="user in chatUsers" :key="user.sessionId" :value="user.sessionId">
+            {{ user.name }}
+          </option>
+        </select>
+      </div>
+
+      <div class="section">
         <label class="section-label">选择角色</label>
         <select v-model="selectedCharId" class="select-input" :disabled="loading">
           <option v-for="char in characters" :key="char.id" :value="char.id">
@@ -212,6 +283,10 @@ function formatDate(isoString) {
       </div>
 
       <div v-if="selectedCharId" class="memory-content">
+        <div class="session-hint">
+          当前记忆空间：{{ currentSessionName }}
+        </div>
+
         <!-- 统计信息 -->
         <div class="stats-bar">
           <div class="stat-item">
@@ -431,6 +506,13 @@ function formatDate(isoString) {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+.session-hint {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #07c160;
+  font-weight: 500;
 }
 
 .stats-bar {

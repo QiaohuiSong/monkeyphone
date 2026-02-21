@@ -1,14 +1,16 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { ArrowLeft, MoreHorizontal, Smile, Send, SendHorizonal, Plus, X, Heart, Image, Camera } from 'lucide-vue-next'
 import {
   sendChatMessage,
+  sendBatchMessage,
   getWechatProfile,
   updateChatMessage,
   deleteChatMessage
 } from '../../services/wechatApi.js'
 import { getCharacterForChat, getPersonas } from '../../services/api.js'
 import { useChatStore } from '../../stores/chatStore.js'
+import TransferModal from './components/TransferModal.vue'
 import TransferBubble from './TransferBubble.vue'
 import RedPacketBubble from './RedPacketBubble.vue'
 import PrivateRedPacketModal from './PrivateRedPacketModal.vue'
@@ -22,6 +24,10 @@ const props = defineProps({
   // 会话元数据（spy模式下用于显示对方名称）
   sessionMeta: { type: Object, default: null }
 })
+
+function isPlayerSession(sessionId = 'player') {
+  return sessionId === 'player' || sessionId.startsWith('player__')
+}
 
 // 使用全局 Chat Store
 const chatStore = useChatStore()
@@ -46,13 +52,18 @@ const emit = defineEmits(['back', 'openProfile'])
 const messages = computed(() => chatStore.getMessages(props.charId, props.sessionId))
 
 const inputText = ref('')
-const isTyping = computed(() => chatStore.isPending(props.charId))
+const isTyping = computed(() => chatStore.isPending(props.charId, props.sessionId))
 const isSendingQueue = computed(() => chatStore.sendingQueue[props.charId] || false)
 const chatListRef = ref(null)
 const inputRef = ref(null)
 const profile = ref(null)
 const character = ref(null)
 const boundPersona = ref(null) // 绑定的人设
+const activePersonaId = computed(() => {
+  if (!props.sessionId?.startsWith('player__')) return null
+  return props.sessionId.slice('player__'.length) || null
+})
+const isPlayerSessionView = computed(() => isPlayerSession(props.sessionId))
 
 // 分页相关（从 Store 获取）
 const hasMoreMessages = computed(() => chatStore.getPaginationInfo(props.charId, props.sessionId).hasMore)
@@ -67,7 +78,8 @@ const showActionPanel = ref(false)
 
 // 转账弹窗状态
 const showTransferModal = ref(false)
-const transferAmount = ref('')
+const pendingQueue = ref([])
+const isSending = ref(false)
 
 // 余额不足弹窗状态
 const showInsufficientModal = ref(false)
@@ -205,7 +217,7 @@ const headerTitle = computed(() => {
       return props.sessionMeta.name
     }
     // 如果是和玩家的对话，显示玩家人设名或"玩家"
-    if (props.sessionId === 'player') {
+    if (isPlayerSessionView.value) {
       return boundPersona.value?.name || '玩家'
     }
     // 其他会话使用 sessionNames 映射
@@ -213,7 +225,7 @@ const headerTitle = computed(() => {
   }
 
   // Player 模式：显示角色名
-  if (props.sessionId === 'player') {
+  if (isPlayerSessionView.value) {
     return profile.value?.nickname || character.value?.name || '聊天'
   }
   return sessionNames[props.sessionId] || props.sessionId
@@ -225,14 +237,14 @@ const sessionTitle = computed(() => {
     if (props.sessionMeta?.name) {
       return props.sessionMeta.name
     }
-    if (props.sessionId === 'player') {
+    if (isPlayerSessionView.value) {
       return boundPersona.value?.name || '玩家'
     }
     return sessionNames[props.sessionId] || '聊天'
   }
 
   // Player 模式
-  if (props.sessionId === 'player') {
+  if (isPlayerSessionView.value) {
     return profile.value?.nickname || character.value?.name || '聊天'
   }
   return sessionNames[props.sessionId] || props.sessionId
@@ -253,7 +265,7 @@ const backgroundStyle = computed(() => {
 
 onMounted(async () => {
   // 进入聊天时通知 Store
-  chatStore.enterChat(props.charId)
+  chatStore.enterChat(props.charId, props.sessionId)
   await loadData()
   loadCustomStickers()
   document.addEventListener('click', hideContextMenu)
@@ -269,7 +281,7 @@ onUnmounted(() => {
 
 watch(() => [props.charId, props.sessionId], async () => {
   // 切换角色时更新 Store
-  chatStore.enterChat(props.charId)
+  chatStore.enterChat(props.charId, props.sessionId)
   await loadData()
 })
 
@@ -289,14 +301,15 @@ async function loadData() {
     await chatStore.loadMessages(props.charId, props.sessionId, false)
 
     // 查找绑定的人设
-    if (profileData?.boundPersonaId) {
-      boundPersona.value = personasData.find(p => p.id === profileData.boundPersonaId) || null
+    const personaId = activePersonaId.value || profileData?.boundPersonaId || null
+    if (personaId) {
+      boundPersona.value = personasData.find(p => p.id === personaId) || null
     } else {
       boundPersona.value = null
     }
 
     // 如果是 player 会话且没有消息，且角色有开场白，自动发送开场白
-    if (props.sessionId === 'player' && messages.value.length === 0 && charData?.greeting && !props.readOnly) {
+    if (isPlayerSessionView.value && messages.value.length === 0 && charData?.greeting && !props.readOnly) {
       await sendGreeting(charData.greeting)
     }
 
@@ -407,22 +420,200 @@ async function sendOnly() {
   }
 }
 
-// 发送并触发AI回复（带拟人化延迟）
-async function sendAndAI() {
-  const text = inputText.value.trim()
-  if (!text || isTyping.value || props.readOnly) return
-
-  inputText.value = ''
-  scrollToBottom()
-
-  await chatStore.sendMessageBackground(props.charId, text, props.sessionId, {
-    onTypingStart: () => scrollToBottom(),
-    onTypingEnd: () => scrollToBottom(),
-    onBubbleAdded: () => scrollToBottom() // 每个气泡添加后滚动
-  })
+function getQueuedTransferTotal(queueItems = pendingQueue.value) {
+  return queueItems.reduce((sum, item) => {
+    if (item?.type !== 'transfer') return sum
+    const amount = parseFloat(item.amount)
+    return Number.isFinite(amount) ? sum + amount : sum
+  }, 0)
 }
 
-// 注：AI 回复解析和消息队列发送已移至 chatStore
+async function getCurrentBalance() {
+  const token = localStorage.getItem('auth_token')
+  const personaId = activePersonaId.value || profile.value?.boundPersonaId || 'default'
+
+  const res = await fetch(`/api/bank/balance?personaId=${encodeURIComponent(personaId)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  })
+  const data = await res.json()
+
+  if (!res.ok || !data?.success) {
+    throw new Error(data?.error || '获取余额失败')
+  }
+
+  return Number(data?.data?.balance || 0)
+}
+
+async function handleSend() {
+  if (isSending.value || isTyping.value || props.readOnly) return
+
+  const text = inputText.value.trim()
+  if (pendingQueue.value.length === 0 && !text) return
+
+  const currentBatch = pendingQueue.value.map(item => ({ ...item }))
+  const textTempId = text ? Date.now() + Math.random() : null
+
+  if (text) {
+    currentBatch.push({
+      id: textTempId,
+      type: 'text',
+      content: text
+    })
+  }
+
+  const batchTransferTotal = Number(getQueuedTransferTotal(currentBatch).toFixed(2))
+  if (batchTransferTotal > 0) {
+    try {
+      const balance = await getCurrentBalance()
+      if (balance < batchTransferTotal) {
+        showInsufficientBalance(balance, batchTransferTotal)
+        return
+      }
+    } catch (e) {
+      console.error('检查余额失败:', e)
+      alert('检查余额失败，请稍后重试')
+      return
+    }
+  }
+
+  if (text) {
+    chatStore.addMessageToCache(
+      props.charId,
+      {
+        id: textTempId,
+        sender: 'player',
+        type: 'text',
+        text,
+        timestamp: new Date().toISOString(),
+        status: 'sending'
+      },
+      props.sessionId
+    )
+  }
+
+  pendingQueue.value = []
+  inputText.value = ''
+  isSending.value = true
+  scrollToBottom()
+
+  try {
+    const response = await sendBatchMessage(props.charId, {
+      sessionId: props.sessionId,
+      items: currentBatch.map(item => ({
+        type: item.type,
+        content: item.content,
+        amount: item.amount,
+        tempId: item.id
+      }))
+    })
+    handleBatchResponse(response, currentBatch)
+  } catch (e) {
+    pendingQueue.value = currentBatch
+    currentBatch.forEach(item => {
+      const existing = messages.value.find(m => String(m.id) === String(item.id))
+      if (!existing) return
+      const updates = { status: 'queue' }
+      if (item.type === 'transfer') {
+        updates.transferData = {
+          ...(existing.transferData || {}),
+          status: 'pending'
+        }
+      }
+      chatStore.updateMessageInCache(props.charId, item.id, updates, props.sessionId)
+    })
+    console.error('批量发送失败:', e)
+    alert('发送失败，请重试')
+  } finally {
+    isSending.value = false
+  }
+}
+
+function handleBatchResponse(res, currentBatch = []) {
+  const payload = res?.data && !Array.isArray(res.data) ? res.data : res
+  const rawResults = Array.isArray(payload?.results) ? payload.results : []
+  const aiMessages = Array.isArray(payload?.aiMessages) ? payload.aiMessages : []
+
+  const fallbackTransferStatus = payload?.transfer_status === 'accepted' ? 'accepted' : 'returned'
+  const results = rawResults.length > 0
+    ? rawResults
+    : currentBatch.map(item => ({
+      type: item.type,
+      tempId: item.id,
+      status: item.type === 'transfer' ? fallbackTransferStatus : 'sent'
+    }))
+
+  results.forEach(result => {
+    const tempId = result.tempId ?? result.temp_id ?? result.id
+    if (tempId === undefined || tempId === null) return
+
+    const currentMsg = messages.value.find(m => String(m.id) === String(tempId))
+    if (!currentMsg) return
+
+    const updates = { status: 'sent' }
+    if (result.type === 'transfer') {
+      const transferStatus = result.status === 'accepted' ? 'accepted' : 'returned'
+      updates.transferStatus = transferStatus
+      updates.transferData = {
+        ...(currentMsg.transferData || {}),
+        status: transferStatus
+      }
+    }
+    chatStore.updateMessageInCache(props.charId, tempId, updates, props.sessionId)
+  })
+
+  const acceptedTransfers = results.filter(r => r.type === 'transfer' && r.status === 'accepted')
+  acceptedTransfers.forEach((transfer, index) => {
+    setTimeout(() => {
+      chatStore.addMessageToCache(
+        props.charId,
+        {
+          id: Date.now() + index,
+          type: 'transfer_receipt',
+          text: '领取了你的转账',
+          sender: 'character',
+          transferRef: transfer.tempId
+        },
+        props.sessionId
+      )
+      scrollToBottom()
+    }, index * 300)
+  })
+
+  if (aiMessages.length > 0) {
+    aiMessages.forEach((msg, index) => {
+      setTimeout(() => {
+        chatStore.addMessageToCache(
+          props.charId,
+          {
+            ...msg,
+            id: msg.id || Date.now() + 1000 + index,
+            sender: msg.sender || 'character'
+          },
+          props.sessionId
+        )
+        scrollToBottom()
+      }, 600 + acceptedTransfers.length * 300 + index * 280)
+    })
+    return
+  }
+
+  const replyText = (payload?.reply || '').trim()
+  if (replyText) {
+    setTimeout(() => {
+      chatStore.addMessageToCache(
+        props.charId,
+        {
+          id: Date.now() + 1000,
+          type: 'text',
+          text: replyText,
+          sender: 'character'
+        },
+        props.sessionId
+      )
+      scrollToBottom()
+    }, 600 + acceptedTransfers.length * 300)
+  }
+}
 
 // ==================== 右键/长按菜单 ====================
 
@@ -577,7 +768,6 @@ function closePanels() {
 function openTransferModal() {
   showActionPanel.value = false
   showTransferModal.value = true
-  transferAmount.value = ''
 }
 
 function closeTransferModal() {
@@ -595,90 +785,59 @@ function closeInsufficientModal() {
   showInsufficientModal.value = false
 }
 
-async function sendTransfer() {
-  if (!transferAmount.value || parseFloat(transferAmount.value) <= 0) {
-    alert('请输入转账金额')
+async function handleTransferConfirm(data) {
+  const amountValue = parseFloat(data?.amount)
+  if (!Number.isFinite(amountValue) || amountValue <= 0) {
+    alert('请输入有效的转账金额')
     return
   }
 
-  const amount = parseFloat(transferAmount.value).toFixed(2)
-  const numAmount = parseFloat(amount)
-
-  // 获取当前人设ID
-  const personaId = profile.value?.boundPersonaId || 'default'
+  const amount = Number(amountValue.toFixed(2))
+  const content = (data?.content || '').trim() || '转账给你的'
+  const queuedTransferTotal = getQueuedTransferTotal()
+  const requiredAmount = Number((queuedTransferTotal + amount).toFixed(2))
 
   try {
-    // 先检查余额是否充足
-    const token = localStorage.getItem('auth_token')
-    const balanceRes = await fetch(`/api/bank/balance?personaId=${personaId}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    const balanceData = await balanceRes.json()
-
-    if (balanceData.success) {
-      const currentBalance = balanceData.data.balance || 0
-      if (currentBalance < numAmount) {
-        // 显示仿真余额不足弹窗
-        showInsufficientBalance(currentBalance, numAmount)
-        return
-      }
-    }
-
-    // 扣减余额
-    const expenseRes = await fetch('/api/bank/transaction', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        type: 'expense',
-        amount: numAmount,
-        source: props.charId,
-        source_name: profile.value?.nickname || character.value?.name || '好友',
-        note: '微信转账',
-        personaId,
-        personaName: boundPersona.value?.name || '默认身份'
-      })
-    })
-
-    const expenseData = await expenseRes.json()
-    if (!expenseRes.ok) {
-      // 后端返回余额不足
-      const balance = expenseData.current_balance || 0
-      showInsufficientBalance(balance, numAmount)
+    const balance = await getCurrentBalance()
+    if (balance < requiredAmount) {
+      showInsufficientBalance(balance, requiredAmount)
       return
     }
-
-    // 发送转账消息，初始状态为 pending（待收款）
-    const msg = await sendChatMessage(
-      props.charId,
-      `[转账] ¥${amount}`,
-      props.sessionId,
-      'player',
-      undefined,
-      {
-        type: 'transfer',
-        transferData: {
-          amount,
-          status: 'pending' // 初始状态：待收款
-        }
-      }
-    )
-    chatStore.addMessageToCache(props.charId, msg, props.sessionId)
-    scrollToBottom()
-    closeTransferModal()
   } catch (e) {
-    console.error('发送转账失败:', e)
-    alert('发送转账失败')
+    console.error('检查余额失败:', e)
+    alert('检查余额失败，请稍后重试')
+    return
   }
+
+  const tempId = Date.now() + Math.random()
+
+  const transferMsg = {
+    id: tempId,
+    type: 'transfer',
+    text: `[转账] ${content}`,
+    sender: 'player',
+    timestamp: new Date().toISOString(),
+    status: 'queue',
+    isRedPacket: true,
+    transferData: {
+      amount: amount.toFixed(2),
+      note: content,
+      status: 'pending'
+    }
+  }
+
+  chatStore.addMessageToCache(props.charId, transferMsg, props.sessionId)
+  pendingQueue.value.push({
+    id: tempId,
+    type: 'transfer',
+    content,
+    amount
+  })
+
+  showTransferModal.value = false
+  nextTick(() => scrollToBottom())
 }
 
-// 注：转账处理已移至 chatStore.processPendingTransfers
-
-// ==================== 红包功能 ====================
-
-// 点击红包气泡
 function handleRedPacketClick(msg) {
   // 自己发的红包不能打开
   if (isOwnMessage(msg)) return
@@ -717,7 +876,7 @@ async function handleOpenRedPacket(msg) {
   try {
     const token = localStorage.getItem('auth_token')
     // 获取当前绑定的人设ID和名称
-    const personaId = profile.value?.boundPersonaId || 'default'
+    const personaId = activePersonaId.value || profile.value?.boundPersonaId || 'default'
     const personaName = boundPersona.value?.name || '默认身份'
 
     await fetch('/api/bank/transaction', {
@@ -931,6 +1090,16 @@ function getAvatarClass(msg) {
               :is-own="isOwnMessage(msg)"
             />
 
+            <!-- 转账收款回执（对方已领取） -->
+            <div v-else-if="msg.type === 'transfer_receipt'" class="transfer-receipt">
+              <div class="receipt-icon">
+                <svg viewBox="0 0 24 24" class="wechat-pay-icon">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="currentColor"/>
+                </svg>
+              </div>
+              <span class="receipt-text">{{ msg.text }}</span>
+            </div>
+
             <!-- 表情贴纸 -->
             <img v-else-if="msg.type === 'sticker'" :src="msg.stickerUrl" class="sticker-img" />
 
@@ -993,8 +1162,7 @@ function getAvatarClass(msg) {
         v-model="inputText"
         type="text"
         placeholder="输入消息..."
-        :disabled="isTyping || isSendingQueue"
-        @keyup.enter="sendAndAI"
+        :disabled="isTyping || isSendingQueue || isSending"
         @focus="closePanels"
       />
       <button class="icon-btn" :class="{ active: showEmojiPanel }" @click="toggleEmojiPanel">
@@ -1004,7 +1172,7 @@ function getAvatarClass(msg) {
       <div class="send-buttons">
         <button
           class="send-btn secondary"
-          :disabled="isTyping || isSendingQueue"
+          :disabled="isTyping || isSendingQueue || isSending"
           @click="sendOnly"
           title="仅发送"
         >
@@ -1012,8 +1180,8 @@ function getAvatarClass(msg) {
         </button>
         <button
           class="send-btn primary"
-          :disabled="isTyping || isSendingQueue"
-          @click="sendAndAI"
+          :disabled="isTyping || isSendingQueue || isSending"
+          @click="handleSend"
           title="发送并获取AI回复"
         >
           <SendHorizonal :size="18" />
@@ -1123,46 +1291,13 @@ function getAvatarClass(msg) {
     </div>
 
     <!-- 转账弹窗 -->
-    <div v-if="showTransferModal" class="transfer-modal-overlay" @click.self="closeTransferModal">
-      <div class="transfer-modal">
-        <div class="transfer-modal-header">
-          <button class="close-btn" @click="closeTransferModal">
-            <X :size="20" />
-          </button>
-          <span class="title">转账</span>
-          <div style="width: 32px"></div>
-        </div>
-
-        <div class="transfer-modal-body">
-          <div class="transfer-to">
-            <span class="to-label">转账给</span>
-            <span class="to-name">{{ profile?.nickname || character?.name || '好友' }}</span>
-          </div>
-
-          <div class="amount-input-section">
-            <span class="currency-symbol">¥</span>
-            <input
-              v-model="transferAmount"
-              type="number"
-              step="0.01"
-              min="0.01"
-              placeholder="0.00"
-              class="transfer-amount-input"
-            />
-          </div>
-
-          <div class="transfer-hint">
-            转账金额将直接发送给对方
-          </div>
-        </div>
-
-        <div class="transfer-modal-footer">
-          <button class="send-transfer-btn" @click="sendTransfer">
-            转账
-          </button>
-        </div>
-      </div>
-    </div>
+    <TransferModal
+      :visible="showTransferModal"
+      :to-name="profile?.nickname || character?.name || '好友'"
+      :loading="isSending"
+      @close="closeTransferModal"
+      @confirm="handleTransferConfirm"
+    />
 
     <!-- 红包开启弹窗 -->
     <PrivateRedPacketModal
@@ -1402,6 +1537,40 @@ function getAvatarClass(msg) {
   background: transparent !important;
   overflow: visible;
   max-width: 200px;
+}
+
+/* 转账收款回执气泡 - 微信经典"对方已领取"样式 */
+.transfer-receipt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #666;
+}
+
+.transfer-receipt-icon {
+  width: 24px;
+  height: 24px;
+  background: linear-gradient(135deg, #f5a623 0%, #e8940c 100%);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.transfer-receipt-icon svg {
+  width: 14px;
+  height: 14px;
+  color: #fff;
+}
+
+.transfer-receipt-text {
+  flex: 1;
+  color: #666;
 }
 
 /* 表情贴纸 */
@@ -2098,3 +2267,4 @@ function getAvatarClass(msg) {
   filter: brightness(0.95);
 }
 </style>
+

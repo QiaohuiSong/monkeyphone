@@ -234,22 +234,29 @@ export async function deletePersona(id) {
 
 // ==================== 记忆系统 API ====================
 
-export async function getMemory(charId) {
-  const data = await request(`/api/wechat/${charId}/memory`)
+export async function getMemory(charId, sessionId = 'player') {
+  const params = new URLSearchParams()
+  if (sessionId) params.append('sessionId', sessionId)
+  const query = params.toString()
+  const data = await request(`/api/wechat/${charId}/memory${query ? `?${query}` : ''}`)
   return data.data
 }
 
-export async function updateMemory(charId, memory) {
+export async function updateMemory(charId, memory, sessionId = 'player') {
   const data = await request(`/api/wechat/${charId}/memory`, {
     method: 'PUT',
-    body: JSON.stringify(memory)
+    body: JSON.stringify({
+      ...memory,
+      sessionId
+    })
   })
   return data.data
 }
 
-export async function triggerSummarize(charId) {
+export async function triggerSummarize(charId, sessionId = 'player') {
   const data = await request(`/api/wechat/${charId}/memory/summarize`, {
-    method: 'POST'
+    method: 'POST',
+    body: JSON.stringify({ sessionId })
   })
   return data.data
 }

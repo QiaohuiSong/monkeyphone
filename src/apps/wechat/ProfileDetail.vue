@@ -18,6 +18,7 @@ const personas = ref([])
 
 // 人设选择器状态
 const showPersonaSelector = ref(false)
+const showChatUserSelector = ref(false)
 
 // 删除确认弹窗
 const showDeleteConfirm = ref(false)
@@ -53,7 +54,16 @@ function goBack() {
 }
 
 function openChat() {
-  emit('openChat', props.charId, 'player')
+  showChatUserSelector.value = true
+}
+
+function closeChatUserSelector() {
+  showChatUserSelector.value = false
+}
+
+function startChatWithSession(sessionId = 'player') {
+  showChatUserSelector.value = false
+  emit('openChat', props.charId, sessionId)
 }
 
 function openMoments() {
@@ -109,7 +119,7 @@ async function confirmDeleteChat() {
   try {
     await clearChatSession(props.charId, 'player')
     // 清空本地缓存（传递 sessionId 以匹配新的缓存 key 格式）
-    chatStore.clearCache(props.charId, 'player')
+    chatStore.clearCache(props.charId)
     closeDeleteConfirm()
     alert('聊天记录已清空')
   } catch (e) {
@@ -132,10 +142,12 @@ async function confirmDeleteChat() {
       <div style="width: 36px"></div>
     </div>
 
-    <!-- 资料卡片 -->
-    <div class="profile-card">
-      <!-- 头像区域 -->
-      <div class="avatar-section">
+    <!-- 可滚动内容区域 -->
+    <div class="scroll-content">
+      <!-- 资料卡片 -->
+      <div class="profile-card">
+        <!-- 头像区域 -->
+        <div class="avatar-section">
         <div class="avatar">
           <img v-if="profile?.avatar || character?.avatar" :src="profile?.avatar || character?.avatar" />
           <span v-else>{{ profile?.nickname?.[0] || character?.name?.[0] || '?' }}</span>
@@ -184,6 +196,7 @@ async function confirmDeleteChat() {
         <Trash2 :size="18" class="menu-icon-left" />
         <span class="menu-label">清空聊天记录</span>
         <ChevronRight :size="20" class="menu-arrow" />
+        </div>
       </div>
     </div>
 
@@ -240,6 +253,39 @@ async function confirmDeleteChat() {
         </div>
         <div class="selector-footer">
           <button class="cancel-btn" @click="closePersonaSelector">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 聊天用户选择 Modal -->
+    <div v-if="showChatUserSelector" class="modal-overlay" @click.self="closeChatUserSelector">
+      <div class="selector-modal">
+        <div class="selector-header">
+          <span>选择聊天用户</span>
+        </div>
+        <div class="selector-list">
+          <div class="selector-item" @click="startChatWithSession('player')">
+            <div class="selector-avatar default">
+              <span>我</span>
+            </div>
+            <div class="selector-name">默认身份</div>
+          </div>
+
+          <div
+            v-for="persona in personas"
+            :key="persona.id"
+            class="selector-item"
+            @click="startChatWithSession(`player__${persona.id}`)"
+          >
+            <div class="selector-avatar">
+              <img v-if="persona.avatar" :src="persona.avatar" />
+              <span v-else>{{ persona.name?.[0] || '?' }}</span>
+            </div>
+            <div class="selector-name">{{ persona.name }}</div>
+          </div>
+        </div>
+        <div class="selector-footer">
+          <button class="cancel-btn" @click="closeChatUserSelector">取消</button>
         </div>
       </div>
     </div>
@@ -302,6 +348,12 @@ async function confirmDeleteChat() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.scroll-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .profile-card {

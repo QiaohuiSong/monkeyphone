@@ -234,4 +234,107 @@ router.get('/transactions', authMiddleware, async (req, res) => {
   }
 })
 
+// ==================== 导出辅助函数（供其他模块调用）====================
+
+// 扣减余额（用于转账等场景）
+export async function deductBalance(username, amount, note = '', personaId = 'default') {
+  try {
+    const numAmount = parseFloat(amount)
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return { success: false, error: '金额无效' }
+    }
+
+    const finalAmount = Math.round(numAmount * 100) / 100
+    const bankPath = await ensureBankFile(username, personaId)
+    const bankData = await fs.readJson(bankPath)
+
+    if (bankData.balance < finalAmount) {
+      return {
+        success: false,
+        error: '余额不足',
+        balance: bankData.balance,
+        required: finalAmount
+      }
+    }
+
+    bankData.balance = preciseSubtract(bankData.balance, finalAmount)
+
+    const newTransaction = {
+      id: generateTransactionId(),
+      type: 'expense',
+      amount: finalAmount,
+      source: 'transfer',
+      source_name: '转账',
+      note,
+      personaId,
+      personaName: personaId === 'default' ? '默认身份' : personaId,
+      timestamp: Date.now()
+    }
+
+    bankData.transactions.unshift(newTransaction)
+    await fs.writeJson(bankPath, bankData, { spaces: 2 })
+
+    return {
+      success: true,
+      balance: bankData.balance,
+      transaction: newTransaction
+    }
+  } catch (error) {
+    console.error('扣减余额失败:', error)
+    return { success: false, error: '扣减余额失败' }
+  }
+}
+
+// 增加余额（用于退款等场景）
+export async function addBalance(username, amount, note = '', personaId = 'default') {
+  try {
+    const numAmount = parseFloat(amount)
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return { success: false, error: '金额无效' }
+    }
+
+    const finalAmount = Math.round(numAmount * 100) / 100
+    const bankPath = await ensureBankFile(username, personaId)
+    const bankData = await fs.readJson(bankPath)
+
+    bankData.balance = preciseAdd(bankData.balance, finalAmount)
+
+    const newTransaction = {
+      id: generateTransactionId(),
+      type: 'income',
+      amount: finalAmount,
+      source: 'transfer',
+      source_name: '转账',
+      note,
+      personaId,
+      personaName: personaId === 'default' ? '默认身份' : personaId,
+      timestamp: Date.now()
+    }
+
+    bankData.transactions.unshift(newTransaction)
+    await fs.writeJson(bankPath, bankData, { spaces: 2 })
+
+    return {
+      success: true,
+      balance: bankData.balance,
+      transaction: newTransaction
+    }
+  } catch (error) {
+    console.error('增加余额失败:', error)
+    return { success: false, error: '增加余额失败' }
+  }
+}
+
+// 获取余额
+export async function getBalance(username, personaId = 'default') {
+  try {
+    const bankPath = await ensureBankFile(username, personaId)
+    const bankData = await fs.readJson(bankPath)
+    return { success: true, balance: bankData.balance }
+  } catch (error) {
+    console.error('获取余额失败:', error)
+    return { success: false, error: '获取余额失败', balance: 0 }
+  }
+}
+
 export default router

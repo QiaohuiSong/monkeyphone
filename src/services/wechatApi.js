@@ -1,4 +1,4 @@
-// 使用相对路径，通过 Vite 代理访问后端
+﻿// 使用相对路径，通过 Vite 代理访问后端
 const API_BASE = ''
 
 function getToken() {
@@ -159,12 +159,40 @@ export async function clearChatSession(charId, sessionId) {
 
 // ==================== AI 聊天 API (复用角色聊天) ====================
 
-export async function sendAIMessage(charId, message) {
+export async function sendAIMessage(charId, message, options = {}) {
+  const { transferData, type, amount, content, sessionId } = options
+
+  const normalizedType = type || (transferData?.amount ? 'transfer' : undefined)
+  const normalizedAmount = amount ?? transferData?.amount
+  const normalizedContent = content ?? message
+
+  const body = { message }
+  if (sessionId) body.sessionId = sessionId
+  if (normalizedType) body.type = normalizedType
+  if (normalizedAmount !== undefined) body.amount = normalizedAmount
+  if (normalizedContent !== undefined) body.content = normalizedContent
+  if (transferData) body.transferData = transferData
+
   const data = await request(`/api/chat/character/${charId}/send`, {
     method: 'POST',
-    body: JSON.stringify({ message })
+    body: JSON.stringify(body)
   })
+
+  if (normalizedType === 'transfer') {
+    return data
+  }
+
   return data.data
+}
+
+export async function sendBatchMessage(charId, payload = {}) {
+  return request('/api/chat/batch', {
+    method: 'POST',
+    body: JSON.stringify({
+      charId,
+      ...payload
+    })
+  })
 }
 
 // 批量保存消息 (单次请求，聚合保存)
@@ -214,3 +242,4 @@ export async function deletePlayerMoment(momentId) {
     method: 'DELETE'
   })
 }
+

@@ -1,13 +1,27 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { MessageCircle, X } from 'lucide-vue-next'
-import { getPlazaCharacters } from '../../../services/api.js'
+import { MessageCircle, X, Plus, Camera } from 'lucide-vue-next'
+import { getPlazaCharacters, getPersonas, createPersona } from '../../../services/api.js'
 
 const router = useRouter()
 const characters = ref([])
 const loading = ref(true)
 const selectedChar = ref(null)
+
+const showUserPicker = ref(false)
+const personas = ref([])
+const pendingChatCharId = ref('')
+
+const showPersonaEditor = ref(false)
+const savingPersona = ref(false)
+const editorForm = ref({
+  name: '',
+  avatar: '',
+  description: '',
+  initialBalance: ''
+})
+const avatarInputRef = ref(null)
 
 const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -18,6 +32,7 @@ const defaultAvatar = 'data:image/svg+xml,' + encodeURIComponent(`
 
 onMounted(async () => {
   await loadCharacters()
+  await loadPersonasList()
 })
 
 async function loadCharacters() {
@@ -31,6 +46,14 @@ async function loadCharacters() {
   }
 }
 
+async function loadPersonasList() {
+  try {
+    personas.value = await getPersonas()
+  } catch (e) {
+    console.error('加载用户列表失败:', e)
+  }
+}
+
 function showDetail(char) {
   selectedChar.value = char
 }
@@ -40,25 +63,100 @@ function closeDetail() {
 }
 
 function chatWithCharacter(charId) {
+  selectedChar.value = null
+  pendingChatCharId.value = charId
+  loadPersonasList()
+  showUserPicker.value = true
+}
+
+function closeUserPicker() {
+  showUserPicker.value = false
+  pendingChatCharId.value = ''
+  closePersonaEditor()
+}
+
+function startChatWithSession(sessionId = 'player') {
+  if (!pendingChatCharId.value) return
   router.push({
     path: '/app/wechat',
-    query: { charId }
+    query: { charId: pendingChatCharId.value, sessionId, fromPlaza: '1' }
   })
+  closeUserPicker()
+}
+
+function openPersonaEditor() {
+  editorForm.value = {
+    name: '',
+    avatar: '',
+    description: '',
+    initialBalance: ''
+  }
+  showPersonaEditor.value = true
+}
+
+function closePersonaEditor() {
+  showPersonaEditor.value = false
+}
+
+function triggerAvatarUpload() {
+  avatarInputRef.value?.click()
+}
+
+async function handleAvatarUpload(event) {
+  const file = event.target.files[0]
+  if (!file) return
+  try {
+    const base64 = await fileToBase64(file)
+    editorForm.value.avatar = base64
+  } catch (e) {
+    console.error('上传头像失败:', e)
+  }
+  event.target.value = ''
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function createAndSelectUser() {
+  const name = editorForm.value.name.trim()
+  if (!name || savingPersona.value) return
+  savingPersona.value = true
+  try {
+    const balanceStr = String(editorForm.value.initialBalance || '').trim()
+    const initialBalance = balanceStr ? parseFloat(balanceStr) : undefined
+    const persona = await createPersona({
+      name,
+      avatar: editorForm.value.avatar,
+      description: editorForm.value.description,
+      initialBalance
+    })
+    personas.value.push(persona)
+    closePersonaEditor()
+    startChatWithSession(`player__${persona.id}`)
+  } catch (e) {
+    console.error('创建用户失败:', e)
+    alert('创建用户失败: ' + e.message)
+  } finally {
+    savingPersona.value = false
+  }
 }
 </script>
 
 <template>
   <div class="character-plaza">
-    <!-- 加载中 -->
     <div v-if="loading" class="loading">加载中...</div>
 
-    <!-- 空状态 -->
     <div v-else-if="characters.length === 0" class="empty">
       <p>角色广场暂无角色</p>
       <p class="hint">创建角色并设为公开后会显示在这里</p>
     </div>
 
-    <!-- 角色列表 -->
     <div v-else class="list">
       <div
         v-for="char in characters"
@@ -78,7 +176,6 @@ function chatWithCharacter(charId) {
       </div>
     </div>
 
-    <!-- 角色详情弹窗 -->
     <div v-if="selectedChar" class="modal-overlay" @click.self="closeDetail">
       <div class="modal">
         <div class="modal-header">
@@ -99,22 +196,11 @@ function chatWithCharacter(charId) {
             <div class="section-title">简介</div>
             <div class="section-content">{{ selectedChar.bio || '暂无简介' }}</div>
           </div>
-
-          <!-- NPC 关系网 / 登场人物 -->
           <div v-if="selectedChar.npcs && selectedChar.npcs.length > 0" class="npc-section">
             <div class="section-title">世界观 / 登场人物</div>
             <div class="npc-list">
-              <div
-                v-for="npc in selectedChar.npcs"
-                :key="npc.id"
-                class="npc-preview-card"
-              >
-                <img
-                  v-if="npc.avatar"
-                  :src="npc.avatar"
-                  class="npc-avatar"
-                  alt=""
-                />
+              <div v-for="npc in selectedChar.npcs" :key="npc.id" class="npc-preview-card">
+                <img v-if="npc.avatar" :src="npc.avatar" class="npc-avatar" alt="" />
                 <div v-else class="npc-avatar npc-avatar-placeholder">
                   {{ npc.name?.[0] || '?' }}
                 </div>
@@ -137,6 +223,89 @@ function chatWithCharacter(charId) {
         </div>
       </div>
     </div>
+
+    <div v-if="showUserPicker" class="modal-overlay" @click.self="closeUserPicker">
+      <div class="modal user-picker-modal">
+        <div class="modal-header">
+          <span class="modal-title">选择聊天用户</span>
+          <button class="close-btn" @click="closeUserPicker">
+            <X :size="20" />
+          </button>
+        </div>
+        <div class="modal-body">
+          <button class="user-item" @click="startChatWithSession('player')">
+            <span class="user-name">默认</span>
+            <span class="user-hint">player</span>
+          </button>
+          <button
+            v-for="persona in personas"
+            :key="persona.id"
+            class="user-item"
+            @click="startChatWithSession(`player__${persona.id}`)"
+          >
+            <span class="user-name">{{ persona.name || '未命名用户' }}</span>
+            <span class="user-hint">{{ persona.id }}</span>
+          </button>
+          <button class="add-user-strip" @click="openPersonaEditor">
+            <Plus :size="18" />
+            <span>新增用户</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <Teleport to="body">
+      <div v-if="showPersonaEditor" class="modal-overlay" @click.self="closePersonaEditor">
+        <div class="modal-content">
+          <div class="modal-header">
+            <span>创建人设</span>
+            <button class="close-btn" @click="closePersonaEditor">
+              <X :size="20" />
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="avatar-upload" @click="triggerAvatarUpload">
+              <div class="avatar-preview">
+                <img v-if="editorForm.avatar" :src="editorForm.avatar" />
+                <span v-else>{{ editorForm.name?.[0] || '?' }}</span>
+              </div>
+              <div class="avatar-overlay">
+                <Camera :size="20" />
+                <span>更换头像</span>
+              </div>
+              <input
+                ref="avatarInputRef"
+                type="file"
+                accept="image/*"
+                style="display: none"
+                @change="handleAvatarUpload"
+              />
+            </div>
+            <div class="form-group">
+              <label>昵称</label>
+              <input v-model="editorForm.name" type="text" placeholder="输入用户昵称" maxlength="20" />
+            </div>
+            <div class="form-group">
+              <label>人设描述</label>
+              <textarea v-model="editorForm.description" placeholder="描述这个用户人设" rows="3"></textarea>
+            </div>
+            <div class="form-group">
+              <label>初始余额</label>
+              <div class="balance-input-wrapper">
+                <span class="currency-symbol">¥</span>
+                <input v-model="editorForm.initialBalance" type="number" placeholder="0.00" step="0.01" min="0" />
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn cancel" @click="closePersonaEditor">取消</button>
+            <button class="btn primary" :disabled="savingPersona || !editorForm.name.trim()" @click="createAndSelectUser">
+              {{ savingPersona ? '创建中' : '创建并聊天' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -170,7 +339,6 @@ function chatWithCharacter(charId) {
   border-radius: 10px;
   align-items: center;
   cursor: pointer;
-  transition: background 0.2s;
 }
 
 .plaza-card:active {
@@ -211,7 +379,6 @@ function chatWithCharacter(charId) {
   margin-top: 2px;
 }
 
-/* 弹窗样式 */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -228,6 +395,17 @@ function chatWithCharacter(charId) {
   background: #222;
   border-radius: 12px;
   overflow: hidden;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 360px;
+  max-height: 85vh;
+  background: #222;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-header {
@@ -266,12 +444,6 @@ function chatWithCharacter(charId) {
   padding: 16px;
   max-height: 50vh;
   overflow-y: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.modal-body::-webkit-scrollbar {
-  display: none;
 }
 
 .detail-header {
@@ -288,15 +460,10 @@ function chatWithCharacter(charId) {
   object-fit: cover;
 }
 
-.detail-info {
-  flex: 1;
-}
-
 .detail-name {
   font-size: 18px;
   font-weight: 600;
   color: #fff;
-  margin-bottom: 4px;
 }
 
 .detail-author {
@@ -323,11 +490,6 @@ function chatWithCharacter(charId) {
   border-radius: 8px;
 }
 
-.modal-footer {
-  padding: 12px 16px;
-  border-top: 1px solid #333;
-}
-
 .chat-btn {
   display: flex;
   align-items: center;
@@ -339,10 +501,7 @@ function chatWithCharacter(charId) {
   border-radius: 8px;
   background: #9c27b0;
   color: #fff;
-  font-size: 14px;
   cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.2s;
 }
 
 .chat-btn.full {
@@ -351,11 +510,10 @@ function chatWithCharacter(charId) {
   padding: 10px 16px;
 }
 
-.chat-btn:hover {
-  background: #7b1fa2;
+.modal-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #333;
 }
-
-/* ==================== NPC 关系网样式 ==================== */
 
 .npc-section {
   margin-top: 16px;
@@ -421,7 +579,166 @@ function chatWithCharacter(charId) {
   font-size: 11px;
   color: #888;
   margin-top: 4px;
-  line-height: 1.4;
-  word-break: break-word;
+}
+
+.user-picker-modal {
+  max-width: 360px;
+}
+
+.user-item {
+  width: 100%;
+  border: 1px solid #3a3a3a;
+  background: #2a2a2a;
+  border-radius: 8px;
+  color: #fff;
+  padding: 10px 12px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.user-item:active {
+  background: #333;
+}
+
+.user-name {
+  font-size: 14px;
+}
+
+.user-hint {
+  font-size: 11px;
+  color: #888;
+}
+
+.add-user-strip {
+  width: 100%;
+  border: 1px dashed #9c27b0;
+  background: #26222b;
+  border-radius: 8px;
+  color: #c8a4df;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.add-user-strip:active {
+  background: #2f2736;
+}
+
+.avatar-upload {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 14px;
+  cursor: pointer;
+}
+
+.avatar-preview {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-preview span {
+  font-size: 28px;
+  color: #fff;
+}
+
+.avatar-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.48);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  opacity: 0;
+}
+
+.avatar-upload:active .avatar-overlay {
+  opacity: 1;
+}
+
+.form-group {
+  margin-bottom: 12px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  color: #aaa;
+  margin-bottom: 6px;
+}
+
+.form-group input,
+.form-group textarea {
+  width: 100%;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: #1c1c1c;
+  color: #fff;
+  padding: 8px 10px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.balance-input-wrapper {
+  position: relative;
+}
+
+.currency-symbol {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #aaa;
+}
+
+.balance-input-wrapper input {
+  padding-left: 24px;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn.cancel {
+  background: #3a3a3a;
+  color: #ddd;
+}
+
+.btn.primary {
+  background: #9c27b0;
+  color: #fff;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

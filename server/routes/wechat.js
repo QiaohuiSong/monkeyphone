@@ -748,6 +748,14 @@ router.delete('/:charId/chats/:sessionId', authMiddleware, async (req, res) => {
   try {
     const { charId, sessionId } = req.params
     const username = req.user.username
+
+    if (sessionId === 'player' || sessionId.startsWith('player__')) {
+      await withLock(`reset:${username}:${charId}`, async () => {
+        await resetCharacterState(username, charId)
+      })
+      return res.json({ success: true, resetAll: true })
+    }
+
     const { chatsDir } = await ensureWechatStructure(username, charId)
     const chatPath = path.join(chatsDir, `${sessionId}.jsonl`)
 
@@ -797,17 +805,109 @@ function getMemoryDir(username, charId) {
   return path.join('./data', username, 'characters', charId)
 }
 
+function normalizeSessionId(sessionId = 'player') {
+  if (typeof sessionId !== 'string') return 'player'
+  const value = sessionId.trim()
+  return value || 'player'
+}
+
+function getMemoryStorageDir(username, charId) {
+  return path.join(getMemoryDir(username, charId), 'memory')
+}
+
+function getMemoryFileName(sessionId = 'player') {
+  const normalized = normalizeSessionId(sessionId)
+  const safeName = normalized.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `${safeName}.json`
+}
+
+function getMemoryPath(username, charId, sessionId = 'player') {
+  return path.join(getMemoryStorageDir(username, charId), getMemoryFileName(sessionId))
+}
+
+function getLegacyMemoryPath(username, charId) {
+  return path.join(getMemoryDir(username, charId), 'memory.json')
+}
+
+async function resetCharacterState(username, charId) {
+  const userDir = path.join('./data', username)
+  const wechatDir = getWechatDir(username, charId)
+  const memoryPath = getLegacyMemoryPath(username, charId)
+  const memoryStorageDir = getMemoryStorageDir(username, charId)
+  const legacyCharChatPath = path.join(userDir, 'char_chats', `${charId}.json`)
+  const playerMomentsPath = path.join(userDir, 'player_moments.json')
+
+  const character = getCharacterById(username, charId) || findCharacterById(charId)
+  const characterName = character?.name || '未命名'
+
+  await fs.remove(wechatDir)
+  await initWechatData(username, charId, characterName)
+  await fs.remove(memoryPath)
+  await fs.remove(memoryStorageDir)
+  await fs.remove(legacyCharChatPath)
+
+  if (await fs.pathExists(userDir)) {
+    const files = await fs.readdir(userDir)
+    const affectionFiles = files.filter(file => /^affection-.*\.json$/.test(file))
+
+    for (const file of affectionFiles) {
+      const filePath = path.join(userDir, file)
+      try {
+        const affectionData = await fs.readJson(filePath)
+        if (affectionData && typeof affectionData === 'object' && affectionData[charId]) {
+          delete affectionData[charId]
+          await fs.writeJson(filePath, affectionData, { spaces: 2 })
+        }
+      } catch (e) {
+        console.error(`重置好感度文件失败: ${filePath}`, e)
+      }
+    }
+  }
+
+  if (await fs.pathExists(playerMomentsPath)) {
+    try {
+      const moments = await fs.readJson(playerMomentsPath)
+      if (Array.isArray(moments)) {
+        const cleaned = moments.map(moment => {
+          const next = { ...moment }
+          if (Array.isArray(next.likes)) {
+            next.likes = next.likes.filter(like => !(like && typeof like === 'object' && like.charId === charId))
+          }
+          if (Array.isArray(next.comments)) {
+            next.comments = next.comments.filter(comment => !(comment && typeof comment === 'object' && comment.charId === charId))
+          }
+          if (Array.isArray(next.syncedToChars)) {
+            next.syncedToChars = next.syncedToChars.filter(id => id !== charId)
+          }
+          return next
+        })
+        await fs.writeJson(playerMomentsPath, cleaned, { spaces: 2 })
+      }
+    } catch (e) {
+      console.error('重置玩家朋友圈互动失败:', e)
+    }
+  }
+}
+
 // 获取角色记忆
 router.get('/:charId/memory', authMiddleware, async (req, res) => {
   try {
     const { charId } = req.params
     const username = req.user.username
-    const memoryDir = getMemoryDir(username, charId)
-    const memoryPath = path.join(memoryDir, 'memory.json')
+    const sessionId = normalizeSessionId(req.query.sessionId || 'player')
+    const memoryDir = getMemoryStorageDir(username, charId)
+    const memoryPath = getMemoryPath(username, charId, sessionId)
+    const legacyMemoryPath = getLegacyMemoryPath(username, charId)
 
     await fs.ensureDir(memoryDir)
 
     if (!await fs.pathExists(memoryPath)) {
+      if (await fs.pathExists(legacyMemoryPath)) {
+        const legacyMemory = await fs.readJson(legacyMemoryPath)
+        await fs.writeJson(memoryPath, legacyMemory, { spaces: 2 })
+        return res.json({ success: true, data: legacyMemory })
+      }
+
       // 初始化空记忆
       const initialMemory = {
         summary: '',
@@ -832,13 +932,15 @@ router.put('/:charId/memory', authMiddleware, async (req, res) => {
   try {
     const { charId } = req.params
     const username = req.user.username
-    const { summary, facts } = req.body
-    const memoryDir = getMemoryDir(username, charId)
-    const memoryPath = path.join(memoryDir, 'memory.json')
+    const { summary, facts, sessionId: bodySessionId } = req.body
+    const sessionId = normalizeSessionId(bodySessionId || req.query.sessionId || 'player')
+    const memoryDir = getMemoryStorageDir(username, charId)
+    const memoryPath = getMemoryPath(username, charId, sessionId)
+    const legacyMemoryPath = getLegacyMemoryPath(username, charId)
 
     await fs.ensureDir(memoryDir)
 
-    await withLock(`memory:${username}:${charId}`, async () => {
+    await withLock(`memory:${username}:${charId}:${sessionId}`, async () => {
       let memory = {
         summary: '',
         facts: [],
@@ -848,6 +950,8 @@ router.put('/:charId/memory', authMiddleware, async (req, res) => {
 
       if (await fs.pathExists(memoryPath)) {
         memory = await fs.readJson(memoryPath)
+      } else if (await fs.pathExists(legacyMemoryPath)) {
+        memory = await fs.readJson(legacyMemoryPath)
       }
 
       if (summary !== undefined) memory.summary = summary
@@ -868,10 +972,11 @@ router.post('/:charId/memory/summarize', authMiddleware, async (req, res) => {
   try {
     const { charId } = req.params
     const username = req.user.username
+    const sessionId = normalizeSessionId(req.body?.sessionId || req.query.sessionId || 'player')
 
     // 导入摘要函数（从 index.js 导出）
     const { summarizeHistory } = await import('../index.js')
-    const result = await summarizeHistory(username, charId)
+    const result = await summarizeHistory(username, charId, sessionId)
 
     if (result.success) {
       res.json({ success: true, data: result.memory })

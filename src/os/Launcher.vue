@@ -338,7 +338,7 @@ function mapWeatherCode(code) {
 /* 应用网格区域 */
 .app-area {
   flex: 1;
-  padding: 0 16px;
+  padding: 8px 22px 0 16px;
   overflow-y: auto;
 }
 
@@ -353,6 +353,7 @@ function mapWeatherCode(code) {
   flex-direction: column;
   align-items: center;
   cursor: pointer;
+  overflow: visible;
 }
 
 .app-icon .icon {
@@ -365,6 +366,12 @@ function mapWeatherCode(code) {
   color: #fff;
   transition: transform 0.2s;
   position: relative;
+  overflow: visible;
+}
+
+.icon.os-launcher-icon,
+.icon.os-dock-icon {
+  overflow: visible !important;
 }
 
 .app-icon:active .icon {
@@ -374,20 +381,23 @@ function mapWeatherCode(code) {
 /* 应用未读徽标 */
 .app-badge {
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: 0;
+  right: 0;
+  transform: translate(42%, -42%);
   min-width: 18px;
   height: 18px;
   background: #f44336;
   color: #fff;
   font-size: 11px;
   font-weight: 600;
-  border-radius: 9px;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0 5px;
   box-sizing: border-box;
+  border: 2px solid rgba(0, 0, 0, 0.45);
+  z-index: 2;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
@@ -408,6 +418,7 @@ function mapWeatherCode(code) {
   padding: 16px 0 20px;
   display: flex;
   justify-content: center;
+  overflow: visible;
 }
 
 .dock {
@@ -420,10 +431,12 @@ function mapWeatherCode(code) {
   display: flex;
   justify-content: space-around;
   align-items: center;
+  overflow: visible;
 }
 
 .dock-icon {
   cursor: pointer;
+  overflow: visible;
 }
 
 .dock-icon .icon {
@@ -436,6 +449,7 @@ function mapWeatherCode(code) {
   color: #fff;
   transition: transform 0.2s;
   position: relative;
+  overflow: visible;
 }
 
 .dock-icon:active .icon {
