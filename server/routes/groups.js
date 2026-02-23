@@ -121,6 +121,25 @@ async function writeJsonl(filePath, dataArray) {
   const content = dataArray.map(d => JSON.stringify(d)).join('\n') + (dataArray.length > 0 ? '\n' : '')
   await fs.writeFile(filePath, content, 'utf-8')
 }
+const redPacketLocks = new Map()
+
+async function withRedPacketLock(packetPath, task) {
+  const previous = redPacketLocks.get(packetPath) || Promise.resolve()
+  let release
+  const current = new Promise(resolve => { release = resolve })
+
+  redPacketLocks.set(packetPath, previous.then(() => current))
+  await previous
+
+  try {
+    return await task()
+  } finally {
+    release()
+    if (redPacketLocks.get(packetPath) === current) {
+      redPacketLocks.delete(packetPath)
+    }
+  }
+}
 
 // ==================== 群组 CRUD ====================
 
@@ -429,7 +448,13 @@ ${historyText || '(空)'}
               // 创建红包
               const amount = parseFloat(reply.redpacket.amount)
               if (!isNaN(amount) && amount >= 0.01) {
-                const packetId = generateId('rp')
+                const groupPath = getGroupPath(req.user.username, req.params.groupId)
+    if (!await fs.pathExists(groupPath)) {
+      return res.status(404).json({ error: '群不存在' })
+    }
+    const group = await fs.readJson(groupPath)
+
+    const packetId = generateId('rp')
                 const now = Date.now()
                 const packet = {
                   id: packetId,
@@ -464,13 +489,16 @@ ${historyText || '(空)'}
                 newMessages.push(redPacketMessage)
 
                 // 触发其他 NPC 抢红包
-                scheduleNpcAutoGrab(
+                const npcMessages = await scheduleNpcAutoGrab(
                   req.user.username,
                   req.params.groupId,
                   packetId,
                   group.members || [],
                   senderId
-                ).catch(e => console.error('NPC 自动抢红包出错:', e))
+                )
+                if (npcMessages.length > 0) {
+                  newMessages.push(...npcMessages)
+                }
               }
             }
 
@@ -562,30 +590,30 @@ router.put('/:groupId/chats/:messageId', authMiddleware, async (req, res) => {
  * 保证数学上不会出现金额超发或负数
  */
 function calculateGrabAmount(remainAmount, remainNum) {
-  // 最后一个人直接拿走所有剩余金额
-  if (remainNum === 1) {
-    return Math.round(remainAmount * 100) / 100
+  const remainCents = Math.max(0, Math.round(Number(remainAmount || 0) * 100))
+  const minCents = 1
+  if (remainCents <= 0) {
+    return 0
   }
 
-  // 二倍均值法
-  const avgAmount = remainAmount / remainNum
-  const maxAmount = Math.min(avgAmount * 2, remainAmount - (remainNum - 1) * 0.01)
-  const minAmount = 0.01
-
-  // 确保 maxAmount >= minAmount
-  if (maxAmount <= minAmount) {
-    return minAmount
+  // 最后一人直接拿走所有剩余金额
+  if (remainNum <= 1) {
+    return remainCents / 100
   }
 
-  // 随机金额
-  let grabAmount = Math.random() * (maxAmount - minAmount) + minAmount
-  grabAmount = Math.round(grabAmount * 100) / 100
+  // 需要至少为其余 (remainNum - 1) 人各保留 0.01 元
+  const maxAllowedCents = remainCents - (remainNum - 1) * minCents
+  if (maxAllowedCents <= minCents) {
+    return minCents / 100
+  }
 
-  // 边界保护
-  grabAmount = Math.max(0.01, grabAmount)
-  grabAmount = Math.min(grabAmount, remainAmount - (remainNum - 1) * 0.01)
+  // 二倍均值法（分），全程整数避免浮点误差
+  const avgCents = Math.floor(remainCents / remainNum)
+  const dynamicMaxCents = Math.min(avgCents * 2, maxAllowedCents)
+  const maxCents = Math.max(minCents, dynamicMaxCents)
+  const grabCents = Math.floor(Math.random() * (maxCents - minCents + 1)) + minCents
 
-  return Math.round(grabAmount * 100) / 100
+  return grabCents / 100
 }
 
 /**
@@ -613,74 +641,43 @@ function markBestLuck(records) {
  * NPC 自动抢红包（异步执行，不阻塞响应）
  */
 async function scheduleNpcAutoGrab(username, groupId, packetId, groupMembers, senderId) {
-  console.log('[红包] 开始 NPC 自动抢红包, groupMembers:', groupMembers.map(m => ({ id: m.id, name: m.name, type: m.type })))
-  console.log('[红包] senderId:', senderId)
-
-  // 过滤出可以抢红包的 NPC（排除发红包的人）
-  // type: 'main' 是角色卡主角色, 'preset' 是预设NPC, 'custom' 是自建NPC
-  const npcs = groupMembers.filter(m => m.id !== senderId)
-
-  console.log('[红包] 可抢红包的成员:', npcs.map(m => ({ id: m.id, name: m.name, type: m.type })))
-
-  if (npcs.length === 0) {
-    console.log('[红包] 没有可抢红包的成员')
-    return
-  }
-
   const packetPath = path.join(getGroupRedPacketsDir(username, groupId), `${packetId}.json`)
   const chatsPath = getGroupChatsPath(username, groupId)
-
-  // 感谢语列表
+  const npcs = (groupMembers || []).filter(m => m?.id && m.id !== senderId)
   const thankMessages = [
-    '谢谢老板！',
-    '老板大气！',
-    '发财发财~',
-    '谢谢红包！',
-    '运气不错嘿嘿',
-    '收到！',
-    '感谢感谢~',
-    '老板威武！',
-    '好耶！'
+    '谢谢老板',
+    '老板大气',
+    '发财发财',
+    '谢谢红包',
+    '收到了',
+    '感谢感谢',
+    '老板威武',
+    '好运来了'
   ]
 
-  // 随机打乱 NPC 顺序
-  const shuffledNpcs = [...npcs].sort(() => Math.random() - 0.5)
+  if (npcs.length === 0) {
+    return []
+  }
 
-  for (let i = 0; i < shuffledNpcs.length; i++) {
-    const npc = shuffledNpcs[i]
+  return withRedPacketLock(packetPath, async () => {
+    if (!await fs.pathExists(packetPath)) {
+      return []
+    }
 
-    // 随机延迟 1-3 秒（测试用，正式环境可改为 3-10 秒）
-    const delay = 1000 + Math.random() * 2000
-    console.log(`[红包] ${npc.name} 将在 ${Math.round(delay/1000)} 秒后抢红包`)
-    await new Promise(resolve => setTimeout(resolve, delay))
+    const packet = await fs.readJson(packetPath)
+    if (packet.remain_num <= 0 || packet.remain_amount <= 0 || Date.now() > packet.expired_at) {
+      return []
+    }
 
-    try {
-      // 重新读取最新红包数据（可能已被其他人抢）
-      if (!await fs.pathExists(packetPath)) {
-        console.log('[红包] 红包文件不存在，停止')
-        return
-      }
-      const packet = await fs.readJson(packetPath)
+    const newMessages = []
+    const shuffledNpcs = [...npcs].sort(() => Math.random() - 0.5)
 
-      console.log(`[红包] ${npc.name} 尝试抢红包, 剩余 ${packet.remain_num} 个, ${packet.remain_amount} 元`)
+    for (const npc of shuffledNpcs) {
+      if (packet.remain_num <= 0 || packet.remain_amount <= 0) break
+      if (packet.records.find(r => r.user_id === npc.id)) continue
 
-      // 检查红包是否还有剩余
-      if (packet.remain_num <= 0) {
-        console.log('[红包] 红包已抢完，停止')
-        return // 红包已抢完，停止
-      }
-
-      // 检查 NPC 是否已抢过
-      if (packet.records.find(r => r.user_id === npc.id)) {
-        console.log(`[红包] ${npc.name} 已抢过，跳过`)
-        continue // 跳过已抢过的 NPC
-      }
-
-      // 使用二倍均值法计算金额
       const grabAmount = calculateGrabAmount(packet.remain_amount, packet.remain_num)
-      console.log(`[红包] ${npc.name} 抢到 ${grabAmount} 元`)
-
-      // 记录
+      if (grabAmount < 0.01) break
       const record = {
         user_id: npc.id,
         user_name: npc.name,
@@ -694,20 +691,9 @@ async function scheduleNpcAutoGrab(username, groupId, packetId, groupMembers, se
       packet.remain_amount = Math.round((packet.remain_amount - grabAmount) * 100) / 100
       packet.remain_num -= 1
 
-      // 边界保护：确保不会出现负数
       if (packet.remain_amount < 0) packet.remain_amount = 0
       if (packet.remain_num < 0) packet.remain_num = 0
 
-      // 如果红包抢完了，计算手气最佳
-      if (packet.remain_num === 0) {
-        markBestLuck(packet.records)
-      }
-
-      // 保存红包数据
-      await fs.writeJson(packetPath, packet, { spaces: 2 })
-      console.log(`[红包] ${npc.name} 抢红包成功，已保存`)
-
-      // 50% 概率发送感谢消息
       if (Math.random() < 0.5) {
         const thankMsg = thankMessages[Math.floor(Math.random() * thankMessages.length)]
         const chatMessage = {
@@ -720,21 +706,18 @@ async function scheduleNpcAutoGrab(username, groupId, packetId, groupMembers, se
           timestamp: new Date().toISOString()
         }
         await appendJsonl(chatsPath, chatMessage)
-        console.log(`[红包] ${npc.name} 发送感谢消息: ${thankMsg}`)
+        newMessages.push(chatMessage)
       }
-
-      // 如果红包抢完了，停止
-      if (packet.remain_num === 0) {
-        console.log('[红包] 红包已全部抢完')
-        return
-      }
-
-    } catch (e) {
-      console.error(`[红包] NPC ${npc.name} 抢红包失败:`, e)
     }
-  }
-}
 
+    if (packet.remain_num === 0) {
+      markBestLuck(packet.records)
+    }
+
+    await fs.writeJson(packetPath, packet, { spaces: 2 })
+    return newMessages
+  })
+}
 // GET /api/groups/:groupId/red-packets - 获取群红包列表
 router.get('/:groupId/red-packets', authMiddleware, async (req, res) => {
   try {
@@ -782,6 +765,12 @@ router.post('/:groupId/red-packets', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: '单个红包金额不能少于0.01元' })
     }
 
+    const groupPath = getGroupPath(req.user.username, req.params.groupId)
+    if (!await fs.pathExists(groupPath)) {
+      return res.status(404).json({ error: '群不存在' })
+    }
+    const group = await fs.readJson(groupPath)
+
     const packetId = generateId('rp')
     const now = Date.now()
     const packet = {
@@ -818,21 +807,16 @@ router.post('/:groupId/red-packets', authMiddleware, async (req, res) => {
     const chatsPath = getGroupChatsPath(req.user.username, req.params.groupId)
     await appendJsonl(chatsPath, message)
 
-    // 获取群成员信息，触发 NPC 自动抢红包
-    const groupPath = getGroupPath(req.user.username, req.params.groupId)
-    if (await fs.pathExists(groupPath)) {
-      const group = await fs.readJson(groupPath)
-      // 异步执行，不阻塞响应
-      scheduleNpcAutoGrab(
-        req.user.username,
-        req.params.groupId,
-        packetId,
-        group.members || [],
-        sender_id || 'user'
-      ).catch(e => console.error('NPC 自动抢红包出错:', e))
-    }
+    const npcMessages = await scheduleNpcAutoGrab(
+      req.user.username,
+      req.params.groupId,
+      packetId,
+      group.members || [],
+      sender_id || 'user'
+    )
+    const latestPacket = await fs.readJson(path.join(redPacketsDir, `${packetId}.json`))
 
-    res.json({ success: true, data: { packet, message } })
+    res.json({ success: true, data: { packet: latestPacket, message, npcMessages } })
   } catch (e) {
     console.error('发红包失败:', e)
     res.status(500).json({ error: '发红包失败' })
@@ -863,81 +847,91 @@ router.get('/:groupId/red-packets/:packetId', authMiddleware, async (req, res) =
 router.post('/:groupId/red-packets/:packetId/grab', authMiddleware, async (req, res) => {
   try {
     const { user_id, user_name, user_avatar } = req.body
+    const grabberId = user_id || 'user'
+
+    const groupPath = getGroupPath(req.user.username, req.params.groupId)
+    if (!await fs.pathExists(groupPath)) {
+      return res.status(404).json({ error: '群不存在' })
+    }
+
+    const group = await fs.readJson(groupPath)
+    const isGroupMember = grabberId === 'user' || (group.members || []).some(m => m.id === grabberId)
+    if (!isGroupMember) {
+      return res.status(403).json({ error: '仅群内成员可抢红包' })
+    }
 
     const packetPath = path.join(
       getGroupRedPacketsDir(req.user.username, req.params.groupId),
       `${req.params.packetId}.json`
     )
 
-    if (!await fs.pathExists(packetPath)) {
-      return res.status(404).json({ error: '红包不存在' })
-    }
+    const result = await withRedPacketLock(packetPath, async () => {
+      if (!await fs.pathExists(packetPath)) {
+        return { status: 404, body: { error: '红包不存在' } }
+      }
+      const packet = await fs.readJson(packetPath)
+      if (Date.now() > packet.expired_at) {
+        return { status: 400, body: { error: '红包已过期' } }
+      }
+      if (packet.remain_num <= 0 || packet.remain_amount <= 0) {
+        return { status: 400, body: { error: '红包已被抢完' } }
+      }
 
-    const packet = await fs.readJson(packetPath)
+      const alreadyGrabbed = packet.records.find(r => r.user_id === grabberId)
+      if (alreadyGrabbed) {
+        return {
+          status: 400,
+          body: {
+            error: '你已经抢过了',
+            already_grabbed: true,
+            grabbed_amount: alreadyGrabbed.amount
+          }
+        }
+      }
 
-    // 检查是否过期
-    if (Date.now() > packet.expired_at) {
-      return res.status(400).json({ error: '红包已过期' })
-    }
-
-    // 检查是否已抢完
-    if (packet.remain_num <= 0) {
-      return res.status(400).json({ error: '红包已被抢完' })
-    }
-
-    // 检查是否已抢过
-    const alreadyGrabbed = packet.records.find(r => r.user_id === user_id)
-    if (alreadyGrabbed) {
-      return res.status(400).json({
-        error: '你已经抢过了',
-        already_grabbed: true,
-        grabbed_amount: alreadyGrabbed.amount
-      })
-    }
-
-    // 使用二倍均值法计算抢到的金额
-    const grabAmount = calculateGrabAmount(packet.remain_amount, packet.remain_num)
-
-    // 记录
-    const record = {
-      user_id: user_id || 'user',
-      user_name: user_name || '我',
-      user_avatar: user_avatar || '',
-      amount: grabAmount,
-      time: Date.now(),
-      is_best: false
-    }
-
-    packet.records.push(record)
-    packet.remain_amount = Math.round((packet.remain_amount - grabAmount) * 100) / 100
-    packet.remain_num -= 1
-
-    // 边界保护：确保不会出现负数
-    if (packet.remain_amount < 0) packet.remain_amount = 0
-    if (packet.remain_num < 0) packet.remain_num = 0
-
-    // 如果红包抢完了，计算手气最佳
-    if (packet.remain_num === 0) {
-      markBestLuck(packet.records)
-    }
-
-    await fs.writeJson(packetPath, packet, { spaces: 2 })
-
-    // 检查当前用户是否是手气最佳
-    const isBest = packet.remain_num === 0 && record.is_best
-
-    res.json({
-      success: true,
-      data: {
+      const grabAmount = calculateGrabAmount(packet.remain_amount, packet.remain_num)
+      if (grabAmount < 0.01) {
+        return { status: 400, body: { error: '红包已被抢完' } }
+      }
+      const record = {
+        user_id: grabberId,
+        user_name: user_name || '我',
+        user_avatar: user_avatar || '',
         amount: grabAmount,
-        packet,
-        is_best: isBest
+        time: Date.now(),
+        is_best: false
+      }
+
+      packet.records.push(record)
+      packet.remain_amount = Math.round((packet.remain_amount - grabAmount) * 100) / 100
+      packet.remain_num -= 1
+      if (packet.remain_amount < 0) packet.remain_amount = 0
+      if (packet.remain_num < 0) packet.remain_num = 0
+
+      if (packet.remain_num === 0) {
+        markBestLuck(packet.records)
+      }
+
+      await fs.writeJson(packetPath, packet, { spaces: 2 })
+
+      const isBest = packet.remain_num === 0 && record.is_best
+      return {
+        status: 200,
+        body: {
+          success: true,
+          data: {
+            amount: grabAmount,
+            packet,
+            is_best: isBest
+          }
+        }
       }
     })
+
+    return res.status(result.status).json(result.body)
   } catch (e) {
     console.error('抢红包失败:', e)
     res.status(500).json({ error: '抢红包失败' })
   }
 })
-
 export default router

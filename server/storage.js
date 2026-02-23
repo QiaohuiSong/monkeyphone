@@ -1,7 +1,10 @@
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 
-const DATA_DIR = './data'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const DATA_DIR = path.join(__dirname, 'data')
 
 // 确保数据目录存在
 if (!fs.existsSync(DATA_DIR)) {

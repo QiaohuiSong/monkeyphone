@@ -6,6 +6,31 @@ function getToken() {
   return localStorage.getItem('auth_token')
 }
 
+function parseJwtPayload(token) {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4 || 4)) % 4, '=')
+    return JSON.parse(atob(padded))
+  } catch {
+    return null
+  }
+}
+
+function isTokenExpired(token) {
+  const payload = parseJwtPayload(token)
+  if (!payload || !payload.exp) return false
+  return Date.now() >= payload.exp * 1000
+}
+
+function handleAuthExpired() {
+  clearToken()
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.href = '/login'
+  }
+}
+
 // 设置 token
 export function setToken(token) {
   localStorage.setItem('auth_token', token)
@@ -18,12 +43,23 @@ export function clearToken() {
 
 // 检查是否已登录
 export function isLoggedIn() {
-  return !!getToken()
+  const token = getToken()
+  if (!token) return false
+  if (isTokenExpired(token)) {
+    handleAuthExpired()
+    return false
+  }
+  return true
 }
 
 // 通用请求方法
 async function request(path, options = {}) {
   const token = getToken()
+  if (token && isTokenExpired(token)) {
+    handleAuthExpired()
+    throw new Error('登录已过期，请重新登录')
+  }
+
   const headers = {
     'Content-Type': 'application/json',
     ...options.headers
@@ -38,13 +74,18 @@ async function request(path, options = {}) {
     headers
   })
 
-  // 检查响应内容类型
-  const contentType = response.headers.get('content-type')
-  if (!contentType || !contentType.includes('application/json')) {
-    throw new Error('服务器返回了非 JSON 响应，请检查后端服务是否正常运行')
+  const contentType = response.headers.get('content-type') || ''
+  const isJson = contentType.includes('application/json')
+  const data = isJson ? await response.json() : null
+
+  if (response.status === 401) {
+    handleAuthExpired()
+    throw new Error((data && data.error) || '登录已过期，请重新登录')
   }
 
-  const data = await response.json()
+  if (!isJson) {
+    throw new Error('服务器返回了非 JSON 响应，请检查后端服务是否正常运行')
+  }
 
   if (!response.ok) {
     throw new Error(data.error || '请求失败')
