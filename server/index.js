@@ -2371,13 +2371,21 @@ app.post('/api/chat/batch', authMiddleware, async (req, res) => {
   }
 
   try {
-    const baseUrl = `${req.protocol}://${req.get('host')}`
-    const forwardResponse = await fetch(`${baseUrl}/api/chat/character/${encodeURIComponent(charId)}/send`, {
+    // NOTE:
+    // Forwarding to req.protocol + host may fail behind reverse proxies / HTTPS termination.
+    // Use local loopback to avoid proxy-dependent protocol/host mismatch in production.
+    const localPort = req.socket?.localPort || PORT
+    const internalBaseUrl = `http://127.0.0.1:${localPort}`
+    const forwardHeaders = {
+      'Content-Type': 'application/json'
+    }
+    if (req.headers.authorization) {
+      forwardHeaders.Authorization = req.headers.authorization
+    }
+
+    const forwardResponse = await fetch(`${internalBaseUrl}/api/chat/character/${encodeURIComponent(charId)}/send`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: req.headers.authorization || ''
-      },
+      headers: forwardHeaders,
       body: JSON.stringify(body)
     })
 
