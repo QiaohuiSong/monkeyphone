@@ -721,7 +721,10 @@ async function handleMembersSelected(selectedMembers) {
         id: m.id,
         name: m.name,
         avatar: m.avatar,
-        type: m.type // 'preset' or 'custom'
+        type: m.type, // 'preset' or 'custom'
+        relation: m.relation || '',
+        bio: m.bio || '',
+        persona: m.persona || ''
       }))
     ]
 
@@ -837,7 +840,10 @@ async function handleAddMembersToExistingGroup(selectedMembers) {
         id: m.id,
         name: m.name,
         avatar: m.avatar,
-        type: m.type
+        type: m.type,
+        relation: m.relation || '',
+        bio: m.bio || '',
+        persona: m.persona || ''
       }))
     ]
 

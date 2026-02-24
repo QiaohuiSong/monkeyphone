@@ -149,6 +149,60 @@ function parseAIResponse(rawText) {
   }
 }
 
+function getPersonaStyle(personaText = '') {
+  const normalizedText = (personaText || '').toString()
+
+  if (/(高冷|冷淡|克制|理性|严肃|毒舌)/.test(normalizedText)) {
+    return 'reserved'
+  }
+  if (/(活泼|可爱|元气|甜|俏皮|阳光)/.test(normalizedText)) {
+    return 'playful'
+  }
+  if (/(温柔|体贴|治愈|细腻|暖)/.test(normalizedText)) {
+    return 'gentle'
+  }
+  if (/(霸道|强势|直接|果断|干脆)/.test(normalizedText)) {
+    return 'direct'
+  }
+  return 'natural'
+}
+
+function buildPersonaFallbackReply({
+  character,
+  userMessageText,
+  currentAffection,
+  isTransferMessage,
+  transferAmount
+}) {
+  const style = getPersonaStyle(character?.persona || '')
+  const relationLevel = Number(currentAffection?.level || 1)
+
+  if (isTransferMessage && transferAmount > 0) {
+    if (relationLevel >= 5) {
+      return style === 'direct'
+        ? '这笔钱我先不收，心意我知道了。你突然这么客气，是不是有心事？'
+        : '你的心意我收到了，但这笔钱先留给你自己。你今天怎么突然这么认真呀？'
+    }
+    return style === 'reserved'
+      ? '这笔钱我先不收，我们先好好聊天吧。你现在心情怎么样？'
+      : '这笔钱先留着吧，我更想听你现在在想什么。刚刚那句话背后是有事吗？'
+  }
+
+  if (style === 'reserved') {
+    return '我在。你刚说的我记住了。你还想继续聊哪件事？'
+  }
+  if (style === 'playful') {
+    return '在呀在呀～我有认真看你说的。那你接下来最想做什么？'
+  }
+  if (style === 'gentle') {
+    return '我在听，也在认真想你的话。你愿意再多说一点吗？'
+  }
+  if (style === 'direct') {
+    return '我明白你的意思了。你现在最想我先回应哪一点？'
+  }
+  return '我在认真听你说。你接下来还想聊什么？'
+}
+
 // 导入健康状态计算函数
 async function getHealthContextForUser(userId) {
   try {
@@ -1467,7 +1521,7 @@ app.post('/api/chat/character/:charId/send', authMiddleware, async (req, res) =>
     console.error('读取用户朋友圈失败:', e)
   }
 
-  // 获取历史消息构建上下文（从 wechat/chats/player.jsonl 读取）
+  // 获取历史消息构建上下文（按当前 sessionId 读取）
   let history = []
   const playerChatPath = path.join(chatsDir, `${currentSessionId}.jsonl`)
   try {
@@ -1533,6 +1587,14 @@ Example: "profile": {"wxId": "your_custom_id", "signature": "你的个性签名"
 
 ${profilePrompt}
 ${transferSystemPrompt}
+[TASK PRIORITY - ROLE FIRST]
+1. First, write "reply" in character as ${character.name}. Persona consistency is the highest priority.
+2. Then decide optional feature fields: profile / redpackets / spyChats / moment / momentInteractions.
+3. If any feature conflicts with persona, tone, or relationship level, keep persona consistency and set that feature to null.
+4. Mandatory exceptions only:
+   - profile is required only when profile is incomplete.
+   - transfer_action is required only for transfer messages.
+
 [RESPONSE FORMAT - STRICT RAW JSON ONLY]
 CRITICAL: Output raw JSON only. DO NOT wrap the output in Markdown code blocks.
 - NO \`\`\`json
@@ -1553,10 +1615,10 @@ Your response MUST be a valid JSON object with this structure:
 FIELD DETAILS:
 - reply: (REQUIRED) Your chat message. Use ### to split into multiple messages.
 - profile: ${needWxId || needSignature ? '(**REQUIRED NOW - 必须填写!**) Must include wxId and/or signature. DO NOT leave this as null!' : '(optional) null or {"wxId": "...", "signature": "..."}'}${isTransferMessage ? '\n- transfer_action: (REQUIRED for transfer) Must be "accept" or "return" - your decision on the transfer' : ''}
-- redpackets: null or [{"amount": "5.20", "note": "爱你"}]
-- spyChats: null or array of spy chat sessions
-- moment: null or {"content": "朋友圈内容", "location": "位置"}
-- momentInteractions: null or array of interactions with user moments
+- redpackets: usually null; only send when it naturally fits your persona and relationship level
+- spyChats: optional; null or array of spy chat sessions
+- moment: optional; null or {"content": "朋友圈内容", "location": "位置"}
+- momentInteractions: optional; null or array of interactions with user moments
 - affection: {"change": -10 to 10, "reason": "简短中文原因"}
 
 [RED PACKET (红包) GENERATION TASK]
@@ -1585,6 +1647,9 @@ Special amounts and meanings:
 
 IMPORTANT:
 - Set redpackets to null most of the time - only send when contextually appropriate
+- Red packet amount and note MUST match your persona style and current relationship level
+- Low relationship levels should avoid romantic/excessive amounts and intimate wording
+- Keep note tone consistent with your speaking style (e.g., cold/teasing/gentle/direct)
 - You can send multiple red packets in one response if the situation calls for it
 - The red packet will appear as a clickable message in the chat
 
@@ -1896,7 +1961,9 @@ ${jsonTaskPrompt}`
       body: JSON.stringify({
         model,
         messages,
-        stream: false
+        stream: false,
+        temperature: 0.4,
+        top_p: 0.7
       })
     })
 
@@ -1915,9 +1982,29 @@ ${jsonTaskPrompt}`
     // ========== 使用强健的 JSON 解析函数 ==========
     const parsed = parseAIResponse(reply)
 
-    // 如果成功解析出结构化数据，使用解析后的文本作为回复
-    if (parsed.isStructured && parsed.text) {
-      reply = parsed.text
+    const parsedReplyText = typeof parsed.text === 'string' ? parsed.text.trim() : ''
+
+    // 结构化解析优先；解析失败时保证兜底文案仍符合人设
+    if (parsed.isStructured && parsedReplyText) {
+      reply = parsedReplyText
+    } else {
+      const rawReplyText = typeof reply === 'string' ? reply.trim() : ''
+      const looksLikeBrokenStructuredOutput =
+        rawReplyText.startsWith('{') ||
+        rawReplyText.startsWith('```') ||
+        /"reply"\s*:|"profile"\s*:|"redpackets"\s*:/.test(rawReplyText)
+
+      if (!rawReplyText || looksLikeBrokenStructuredOutput) {
+        reply = buildPersonaFallbackReply({
+          character,
+          userMessageText,
+          currentAffection,
+          isTransferMessage,
+          transferAmount
+        })
+      } else {
+        reply = rawReplyText
+      }
     }
 
     // 处理解析出的副作用数据
@@ -2192,8 +2279,8 @@ ${jsonTaskPrompt}`
       }
     }
 
-    // ========== 保存到 wechat/chats/player.jsonl（统一存储）==========
-    const playerChatPath = path.join(chatsDir, 'player.jsonl')
+    // ========== 保存到 wechat/chats/{sessionId}.jsonl（会话隔离存储）==========
+    const playerChatPath = path.join(chatsDir, `${currentSessionId}.jsonl`)
     await fs.ensureDir(chatsDir)
 
     // 1. 保存用户消息

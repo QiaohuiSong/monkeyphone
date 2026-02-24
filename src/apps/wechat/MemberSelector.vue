@@ -107,11 +107,15 @@ function toggleSelect(member, type) {
   if (index >= 0) {
     selectedMembers.value.splice(index, 1)
   } else {
+    const persona = (member.persona || member.personality || '').toString().trim()
     selectedMembers.value.push({
       id: member.id,
       type,
       name: member.name,
-      avatar: member.avatar
+      avatar: member.avatar,
+      relation: member.relation || '',
+      bio: member.bio || '',
+      persona
     })
   }
 }
@@ -158,7 +162,10 @@ async function createNpc() {
       id: npc.id,
       type: 'custom',
       name: npc.name,
-      avatar: npc.avatar
+      avatar: npc.avatar,
+      relation: '',
+      bio: '',
+      persona: (npc.personality || '').toString().trim()
     })
     closeCreateForm()
   } catch (e) {

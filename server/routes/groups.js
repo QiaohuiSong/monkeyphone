@@ -97,6 +97,57 @@ function generateId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
 }
 
+function getMemberTypeLabel(type = '') {
+  if (type === 'main') return '角色卡'
+  if (type === 'preset') return 'NPC'
+  if (type === 'custom') return '自建角色'
+  return '群成员'
+}
+
+function getMemberPersonaSummary(member = {}) {
+  const parts = []
+  const persona = (member.persona || member.personality || '').toString().trim()
+  const relation = (member.relation || '').toString().trim()
+  const bio = (member.bio || '').toString().trim()
+
+  if (persona) parts.push(`人设: ${persona}`)
+  if (relation) parts.push(`关系: ${relation}`)
+  if (bio) parts.push(`简介: ${bio}`)
+
+  if (parts.length === 0) {
+    return '未提供明确人设，请保持自然、礼貌、口语化表达'
+  }
+  return parts.join('；')
+}
+
+function buildRedPacketThanks(member = {}, senderName = '') {
+  const personaText = `${member.persona || ''} ${member.personality || ''} ${member.relation || ''}`.toLowerCase()
+  const target = senderName || '你'
+
+  if (/高冷|冷淡|克制|理性|严肃/.test(personaText)) {
+    return `收到了，谢谢${target}`
+  }
+  if (/可爱|活泼|元气|甜|俏皮/.test(personaText)) {
+    return `哇！谢谢${target}的红包~`
+  }
+  if (/霸道|强势|总裁|大佬/.test(personaText)) {
+    return '红包收下了，谢了'
+  }
+  if (/温柔|体贴|暖|治愈/.test(personaText)) {
+    return `谢谢${target}，你也要开心呀`
+  }
+
+  const fallback = [
+    '谢谢老板',
+    '老板大气',
+    '发财发财',
+    '谢谢红包',
+    '感恩感恩',
+    '好运来了'
+  ]
+  return fallback[Math.floor(Math.random() * fallback.length)]
+}
+
 // 读取 JSONL 文件
 async function readJsonl(filePath) {
   try {
@@ -348,21 +399,39 @@ router.post('/:groupId/chats/ai', authMiddleware, async (req, res) => {
     }
 
     // 构建成员信息
-    const membersInfo = group.members.map(m => {
+    const membersInfo__old = group.members.map(m => {
       return `- ${m.name} (${m.type === 'main' ? '角色卡' : m.type === 'preset' ? 'NPC' : '自建'})`
     }).join('\n')
+    void membersInfo__old
 
     // 构建历史消息
+    const memberProfiles = (group.members || [])
+      .filter(m => m && m.id && m.name)
+      .map(m => ({
+        ...m,
+        typeLabel: getMemberTypeLabel(m.type),
+        personaSummary: getMemberPersonaSummary(m)
+      }))
+
+    const membersInfo = memberProfiles.map(m => {
+      return `- ID: ${m.id}
+  名称: ${m.name}
+  类型: ${m.typeLabel}
+  ${m.personaSummary}`
+    }).join('\n\n')
+
     const historyText = existingMessages.slice(-30).map(m => {
       const senderLabel = m.sender === 'user' ? (boundPersona?.name || '玩家') : m.sender_name
       return `${senderLabel}: ${m.text}`
     }).join('\n')
 
     // 随机选择一个或多个成员回复
-    const availableMembers = group.members.filter(m => m.type !== 'main' || m.persona)
+    const availableMembers = memberProfiles
     if (availableMembers.length === 0) {
       return res.json({ success: true, data: [] })
     }
+
+    const allowedMemberIds = availableMembers.map(m => m.id).join(', ')
 
     // 构建 AI prompt
     const systemPrompt = `你是一个群聊模拟器。群里有以下成员：
@@ -400,6 +469,44 @@ ${boundPersona ? `玩家身份：${boundPersona.name}${boundPersona.description 
 ${historyText || '(空)'}
 
 请根据上面的对话，让合适的群成员回复。`
+    void systemPrompt
+    void userPrompt
+
+    const systemPromptV2 = `你是一个微信群聊模拟器。群里有以下成员（必须严格按成员人设说话）：
+${membersInfo}
+
+${boundPersona ? `玩家身份：${boundPersona.name}${boundPersona.description ? '\n玩家描述：' + boundPersona.description : ''}` : '玩家是普通用户。'}
+
+规则：
+1. 根据聊天内容，选择 1-3 个合适成员回复。
+2. 每个成员的语气必须符合其人设（最重要）。
+3. 只能使用真实群成员，member_id 只能是：${allowedMemberIds}
+4. 回复要自然、口语化，像真实群聊，不要所有人都回复。
+5. 成员可以发红包（redpacket），但红包文案必须符合该成员人设与语气。
+
+请返回 JSON 格式：
+{
+  "replies": [
+    {
+      "member_id": "成员ID",
+      "member_name": "成员名",
+      "text": "回复内容",
+      "redpacket": null or {"amount": "金额", "note": "祝福语"}
+    }
+  ]
+}
+
+红包规则：
+- 只在适当场合发红包（庆祝、感谢、安慰等）。
+- 金额合理，避免离谱。
+- 绝大多数情况下 redpacket 设为 null。
+
+只返回 JSON，不要输出其他解释。`
+
+    const userPromptV2 = `群聊历史：
+${historyText || '(空)'}
+
+请根据上面的对话，让合适的群成员回复。优先保证人设一致性，再考虑是否发红包。`
 
     const aiRes = await fetch(`${NEWAPI_BASE_URL}/v1/chat/completions`, {
       method: 'POST',
@@ -410,8 +517,8 @@ ${historyText || '(空)'}
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
+          { role: 'system', content: systemPromptV2 },
+          { role: 'user', content: userPromptV2 }
         ],
         stream: false
       })
@@ -439,8 +546,9 @@ ${historyText || '(空)'}
         if (parsed.replies && Array.isArray(parsed.replies)) {
           for (const reply of parsed.replies) {
             const member = group.members.find(m => m.id === reply.member_id || m.name === reply.member_name)
-            const senderId = reply.member_id || member?.id || 'npc'
-            const senderName = reply.member_name || member?.name || '群成员'
+            if (!member || !member.id || !member.name) continue
+            const senderId = member.id
+            const senderName = member.name
             const senderAvatar = member?.avatar || ''
 
             // 检查是否有红包
@@ -454,6 +562,7 @@ ${historyText || '(空)'}
     }
     const group = await fs.readJson(groupPath)
 
+    reply.redpacket.note = (reply.redpacket.note || buildRedPacketThanks(member, boundPersona?.name || '你')).toString().trim() || '恭喜发财，大吉大利'
     const packetId = generateId('rp')
                 const now = Date.now()
                 const packet = {
@@ -695,7 +804,7 @@ async function scheduleNpcAutoGrab(username, groupId, packetId, groupMembers, se
       if (packet.remain_num < 0) packet.remain_num = 0
 
       if (Math.random() < 0.5) {
-        const thankMsg = thankMessages[Math.floor(Math.random() * thankMessages.length)]
+        const thankMsg = buildRedPacketThanks(npc, packet.sender_name || '') || thankMessages[Math.floor(Math.random() * thankMessages.length)]
         const chatMessage = {
           id: generateId('msg'),
           sender: npc.id,
